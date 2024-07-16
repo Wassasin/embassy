@@ -7,8 +7,9 @@ pub const FORCE_COPY_BUFFER_SIZE: usize = 512;
 pub const FLASH_SIZE: usize = 512 * 1024;
 
 pub const RESET_PIN: u32 = 18;
+pub const APPROTECT_MIN_BUILD_CODE: u8 = b'B';
 
-embassy_hal_common::peripherals! {
+embassy_hal_internal::peripherals! {
     // USB
     USBD,
 
@@ -169,9 +170,19 @@ embassy_hal_common::peripherals! {
 
     // I2S
     I2S,
+
+    // Radio
+    RADIO,
+
+    // EGU
+    EGU0,
+    EGU1,
+    EGU2,
+    EGU3,
+    EGU4,
+    EGU5,
 }
 
-#[cfg(feature = "nightly")]
 impl_usb!(USBD, USBD, USBD);
 
 impl_uarte!(UARTE0, UARTE0, UARTE0_UART0);
@@ -196,6 +207,12 @@ impl_pwm!(PWM0, PWM0, PWM0);
 impl_pwm!(PWM1, PWM1, PWM1);
 impl_pwm!(PWM2, PWM2, PWM2);
 impl_pwm!(PWM3, PWM3, PWM3);
+
+impl_pdm!(PDM, PDM, PDM);
+
+impl_qdec!(QDEC, QDEC, QDEC);
+
+impl_rng!(RNG, RNG, RNG);
 
 impl_timer!(TIMER0, TIMER0, TIMER0);
 impl_timer!(TIMER1, TIMER1, TIMER1);
@@ -300,50 +317,55 @@ impl_saadc_input!(P0_31, ANALOG_INPUT7);
 
 impl_i2s!(I2S, I2S, I2S);
 
-pub mod irqs {
-    use embassy_cortex_m::interrupt::_export::declare;
+impl_radio!(RADIO, RADIO, RADIO);
 
-    use crate::pac::Interrupt as InterruptEnum;
+impl_egu!(EGU0, EGU0, SWI0_EGU0);
+impl_egu!(EGU1, EGU1, SWI1_EGU1);
+impl_egu!(EGU2, EGU2, SWI2_EGU2);
+impl_egu!(EGU3, EGU3, SWI3_EGU3);
+impl_egu!(EGU4, EGU4, SWI4_EGU4);
+impl_egu!(EGU5, EGU5, SWI5_EGU5);
 
-    declare!(POWER_CLOCK);
-    declare!(RADIO);
-    declare!(UARTE0_UART0);
-    declare!(SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0);
-    declare!(SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1);
-    declare!(NFCT);
-    declare!(GPIOTE);
-    declare!(SAADC);
-    declare!(TIMER0);
-    declare!(TIMER1);
-    declare!(TIMER2);
-    declare!(RTC0);
-    declare!(TEMP);
-    declare!(RNG);
-    declare!(ECB);
-    declare!(CCM_AAR);
-    declare!(WDT);
-    declare!(RTC1);
-    declare!(QDEC);
-    declare!(COMP_LPCOMP);
-    declare!(SWI0_EGU0);
-    declare!(SWI1_EGU1);
-    declare!(SWI2_EGU2);
-    declare!(SWI3_EGU3);
-    declare!(SWI4_EGU4);
-    declare!(SWI5_EGU5);
-    declare!(TIMER3);
-    declare!(TIMER4);
-    declare!(PWM0);
-    declare!(PDM);
-    declare!(MWU);
-    declare!(PWM1);
-    declare!(PWM2);
-    declare!(SPIM2_SPIS2_SPI2);
-    declare!(RTC2);
-    declare!(FPU);
-    declare!(USBD);
-    declare!(UARTE1);
-    declare!(PWM3);
-    declare!(SPIM3);
-    declare!(I2S);
-}
+embassy_hal_internal::interrupt_mod!(
+    POWER_CLOCK,
+    RADIO,
+    UARTE0_UART0,
+    SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0,
+    SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1,
+    NFCT,
+    GPIOTE,
+    SAADC,
+    TIMER0,
+    TIMER1,
+    TIMER2,
+    RTC0,
+    TEMP,
+    RNG,
+    ECB,
+    CCM_AAR,
+    WDT,
+    RTC1,
+    QDEC,
+    COMP_LPCOMP,
+    SWI0_EGU0,
+    SWI1_EGU1,
+    SWI2_EGU2,
+    SWI3_EGU3,
+    SWI4_EGU4,
+    SWI5_EGU5,
+    TIMER3,
+    TIMER4,
+    PWM0,
+    PDM,
+    MWU,
+    PWM1,
+    PWM2,
+    SPIM2_SPIS2_SPI2,
+    RTC2,
+    FPU,
+    USBD,
+    UARTE1,
+    PWM3,
+    SPIM3,
+    I2S,
+);

@@ -1,4 +1,6 @@
 #![no_std]
+#![doc = include_str!("../README.md")]
+#![warn(missing_docs)]
 
 // must go first!
 mod fmt;
@@ -8,11 +10,15 @@ use core::mem::MaybeUninit;
 use core::task::{Context, Poll};
 
 pub use embassy_net_driver as driver;
-use embassy_net_driver::{Capabilities, LinkState, Medium};
+use embassy_net_driver::{Capabilities, LinkState};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::waitqueue::WakerRegistration;
+use embassy_sync::zerocopy_channel;
 
+/// Channel state.
+///
+/// Holds a buffer of packets with size MTU, for both TX and RX.
 pub struct State<const MTU: usize, const N_RX: usize, const N_TX: usize> {
     rx: [PacketBuf<MTU>; N_RX],
     tx: [PacketBuf<MTU>; N_TX],
@@ -22,6 +28,7 @@ pub struct State<const MTU: usize, const N_RX: usize, const N_TX: usize> {
 impl<const MTU: usize, const N_RX: usize, const N_TX: usize> State<MTU, N_RX, N_TX> {
     const NEW_PACKET: PacketBuf<MTU> = PacketBuf::new();
 
+    /// Create a new channel state.
     pub const fn new() -> Self {
         Self {
             rx: [Self::NEW_PACKET; N_RX],
@@ -37,33 +44,45 @@ struct StateInner<'d, const MTU: usize> {
     shared: Mutex<NoopRawMutex, RefCell<Shared>>,
 }
 
-/// State of the LinkState
 struct Shared {
     link_state: LinkState,
     waker: WakerRegistration,
-    ethernet_address: [u8; 6],
+    hardware_address: driver::HardwareAddress,
 }
 
+/// Channel runner.
+///
+/// Holds the shared state and the lower end of channels for inbound and outbound packets.
 pub struct Runner<'d, const MTU: usize> {
     tx_chan: zerocopy_channel::Receiver<'d, NoopRawMutex, PacketBuf<MTU>>,
     rx_chan: zerocopy_channel::Sender<'d, NoopRawMutex, PacketBuf<MTU>>,
     shared: &'d Mutex<NoopRawMutex, RefCell<Shared>>,
 }
 
+/// State runner.
+///
+/// Holds the shared state of the channel such as link state.
 #[derive(Clone, Copy)]
 pub struct StateRunner<'d> {
     shared: &'d Mutex<NoopRawMutex, RefCell<Shared>>,
 }
 
+/// RX runner.
+///
+/// Holds the lower end of the channel for passing inbound packets up the stack.
 pub struct RxRunner<'d, const MTU: usize> {
     rx_chan: zerocopy_channel::Sender<'d, NoopRawMutex, PacketBuf<MTU>>,
 }
 
+/// TX runner.
+///
+/// Holds the lower end of the channel for passing outbound packets down the stack.
 pub struct TxRunner<'d, const MTU: usize> {
     tx_chan: zerocopy_channel::Receiver<'d, NoopRawMutex, PacketBuf<MTU>>,
 }
 
 impl<'d, const MTU: usize> Runner<'d, MTU> {
+    /// Split the runner into separate runners for controlling state, rx and tx.
     pub fn split(self) -> (StateRunner<'d>, RxRunner<'d, MTU>, TxRunner<'d, MTU>) {
         (
             StateRunner { shared: self.shared },
@@ -72,10 +91,25 @@ impl<'d, const MTU: usize> Runner<'d, MTU> {
         )
     }
 
+    /// Split the runner into separate runners for controlling state, rx and tx borrowing the underlying state.
+    pub fn borrow_split(&mut self) -> (StateRunner<'_>, RxRunner<'_, MTU>, TxRunner<'_, MTU>) {
+        (
+            StateRunner { shared: self.shared },
+            RxRunner {
+                rx_chan: self.rx_chan.borrow(),
+            },
+            TxRunner {
+                tx_chan: self.tx_chan.borrow(),
+            },
+        )
+    }
+
+    /// Create a state runner sharing the state channel.
     pub fn state_runner(&self) -> StateRunner<'d> {
         StateRunner { shared: self.shared }
     }
 
+    /// Set the link state.
     pub fn set_link_state(&mut self, state: LinkState) {
         self.shared.lock(|s| {
             let s = &mut *s.borrow_mut();
@@ -84,24 +118,28 @@ impl<'d, const MTU: usize> Runner<'d, MTU> {
         });
     }
 
-    pub fn set_ethernet_address(&mut self, address: [u8; 6]) {
+    /// Set the hardware address.
+    pub fn set_hardware_address(&mut self, address: driver::HardwareAddress) {
         self.shared.lock(|s| {
             let s = &mut *s.borrow_mut();
-            s.ethernet_address = address;
+            s.hardware_address = address;
             s.waker.wake();
         });
     }
 
+    /// Wait until there is space for more inbound packets and return a slice they can be copied into.
     pub async fn rx_buf(&mut self) -> &mut [u8] {
         let p = self.rx_chan.send().await;
         &mut p.buf
     }
 
+    /// Check if there is space for more inbound packets right now.
     pub fn try_rx_buf(&mut self) -> Option<&mut [u8]> {
         let p = self.rx_chan.try_send()?;
         Some(&mut p.buf)
     }
 
+    /// Polling the inbound channel if there is space for packets.
     pub fn poll_rx_buf(&mut self, cx: &mut Context) -> Poll<&mut [u8]> {
         match self.rx_chan.poll_send(cx) {
             Poll::Ready(p) => Poll::Ready(&mut p.buf),
@@ -109,35 +147,41 @@ impl<'d, const MTU: usize> Runner<'d, MTU> {
         }
     }
 
+    /// Mark packet of len bytes as pushed to the inbound channel.
     pub fn rx_done(&mut self, len: usize) {
         let p = self.rx_chan.try_send().unwrap();
         p.len = len;
         self.rx_chan.send_done();
     }
 
+    /// Wait until there is space for more outbound packets and return a slice they can be copied into.
     pub async fn tx_buf(&mut self) -> &mut [u8] {
-        let p = self.tx_chan.recv().await;
+        let p = self.tx_chan.receive().await;
         &mut p.buf[..p.len]
     }
 
+    /// Check if there is space for more outbound packets right now.
     pub fn try_tx_buf(&mut self) -> Option<&mut [u8]> {
-        let p = self.tx_chan.try_recv()?;
+        let p = self.tx_chan.try_receive()?;
         Some(&mut p.buf[..p.len])
     }
 
+    /// Polling the outbound channel if there is space for packets.
     pub fn poll_tx_buf(&mut self, cx: &mut Context) -> Poll<&mut [u8]> {
-        match self.tx_chan.poll_recv(cx) {
+        match self.tx_chan.poll_receive(cx) {
             Poll::Ready(p) => Poll::Ready(&mut p.buf[..p.len]),
             Poll::Pending => Poll::Pending,
         }
     }
 
+    /// Mark outbound packet as copied.
     pub fn tx_done(&mut self) {
-        self.tx_chan.recv_done();
+        self.tx_chan.receive_done();
     }
 }
 
 impl<'d> StateRunner<'d> {
+    /// Set link state.
     pub fn set_link_state(&self, state: LinkState) {
         self.shared.lock(|s| {
             let s = &mut *s.borrow_mut();
@@ -146,26 +190,30 @@ impl<'d> StateRunner<'d> {
         });
     }
 
-    pub fn set_ethernet_address(&self, address: [u8; 6]) {
+    /// Set the hardware address.
+    pub fn set_hardware_address(&self, address: driver::HardwareAddress) {
         self.shared.lock(|s| {
             let s = &mut *s.borrow_mut();
-            s.ethernet_address = address;
+            s.hardware_address = address;
             s.waker.wake();
         });
     }
 }
 
 impl<'d, const MTU: usize> RxRunner<'d, MTU> {
+    /// Wait until there is space for more inbound packets and return a slice they can be copied into.
     pub async fn rx_buf(&mut self) -> &mut [u8] {
         let p = self.rx_chan.send().await;
         &mut p.buf
     }
 
+    /// Check if there is space for more inbound packets right now.
     pub fn try_rx_buf(&mut self) -> Option<&mut [u8]> {
         let p = self.rx_chan.try_send()?;
         Some(&mut p.buf)
     }
 
+    /// Polling the inbound channel if there is space for packets.
     pub fn poll_rx_buf(&mut self, cx: &mut Context) -> Poll<&mut [u8]> {
         match self.rx_chan.poll_send(cx) {
             Poll::Ready(p) => Poll::Ready(&mut p.buf),
@@ -173,6 +221,7 @@ impl<'d, const MTU: usize> RxRunner<'d, MTU> {
         }
     }
 
+    /// Mark packet of len bytes as pushed to the inbound channel.
     pub fn rx_done(&mut self, len: usize) {
         let p = self.rx_chan.try_send().unwrap();
         p.len = len;
@@ -181,35 +230,44 @@ impl<'d, const MTU: usize> RxRunner<'d, MTU> {
 }
 
 impl<'d, const MTU: usize> TxRunner<'d, MTU> {
+    /// Wait until there is space for more outbound packets and return a slice they can be copied into.
     pub async fn tx_buf(&mut self) -> &mut [u8] {
-        let p = self.tx_chan.recv().await;
+        let p = self.tx_chan.receive().await;
         &mut p.buf[..p.len]
     }
 
+    /// Check if there is space for more outbound packets right now.
     pub fn try_tx_buf(&mut self) -> Option<&mut [u8]> {
-        let p = self.tx_chan.try_recv()?;
+        let p = self.tx_chan.try_receive()?;
         Some(&mut p.buf[..p.len])
     }
 
+    /// Polling the outbound channel if there is space for packets.
     pub fn poll_tx_buf(&mut self, cx: &mut Context) -> Poll<&mut [u8]> {
-        match self.tx_chan.poll_recv(cx) {
+        match self.tx_chan.poll_receive(cx) {
             Poll::Ready(p) => Poll::Ready(&mut p.buf[..p.len]),
             Poll::Pending => Poll::Pending,
         }
     }
 
+    /// Mark outbound packet as copied.
     pub fn tx_done(&mut self) {
-        self.tx_chan.recv_done();
+        self.tx_chan.receive_done();
     }
 }
 
+/// Create a channel.
+///
+/// Returns a pair of handles for interfacing with the peripheral and the networking stack.
+///
+/// The runner is interfacing with the peripheral at the lower part of the stack.
+/// The device is interfacing with the networking stack on the layer above.
 pub fn new<'d, const MTU: usize, const N_RX: usize, const N_TX: usize>(
     state: &'d mut State<MTU, N_RX, N_TX>,
-    ethernet_address: [u8; 6],
+    hardware_address: driver::HardwareAddress,
 ) -> (Runner<'d, MTU>, Device<'d, MTU>) {
     let mut caps = Capabilities::default();
     caps.max_transmission_unit = MTU;
-    caps.medium = Medium::Ethernet;
 
     // safety: this is a self-referential struct, however:
     // - it can't move while the `'d` borrow is active.
@@ -221,7 +279,7 @@ pub fn new<'d, const MTU: usize, const N_RX: usize, const N_TX: usize>(
         tx: zerocopy_channel::Channel::new(&mut state.tx[..]),
         shared: Mutex::new(RefCell::new(Shared {
             link_state: LinkState::Down,
-            ethernet_address,
+            hardware_address,
             waker: WakerRegistration::new(),
         })),
     });
@@ -244,17 +302,22 @@ pub fn new<'d, const MTU: usize, const N_RX: usize, const N_TX: usize>(
     )
 }
 
+/// Represents a packet of size MTU.
 pub struct PacketBuf<const MTU: usize> {
     len: usize,
     buf: [u8; MTU],
 }
 
 impl<const MTU: usize> PacketBuf<MTU> {
+    /// Create a new packet buffer.
     pub const fn new() -> Self {
         Self { len: 0, buf: [0; MTU] }
     }
 }
 
+/// Channel device.
+///
+/// Holds the shared state and upper end of channels for inbound and outbound packets.
 pub struct Device<'d, const MTU: usize> {
     rx: zerocopy_channel::Receiver<'d, NoopRawMutex, PacketBuf<MTU>>,
     tx: zerocopy_channel::Sender<'d, NoopRawMutex, PacketBuf<MTU>>,
@@ -267,7 +330,7 @@ impl<'d, const MTU: usize> embassy_net_driver::Driver for Device<'d, MTU> {
     type TxToken<'a> = TxToken<'a, MTU> where Self: 'a ;
 
     fn receive(&mut self, cx: &mut Context) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        if self.rx.poll_recv(cx).is_ready() && self.tx.poll_send(cx).is_ready() {
+        if self.rx.poll_receive(cx).is_ready() && self.tx.poll_send(cx).is_ready() {
             Some((RxToken { rx: self.rx.borrow() }, TxToken { tx: self.tx.borrow() }))
         } else {
             None
@@ -288,8 +351,8 @@ impl<'d, const MTU: usize> embassy_net_driver::Driver for Device<'d, MTU> {
         self.caps.clone()
     }
 
-    fn ethernet_address(&self) -> [u8; 6] {
-        self.shared.lock(|s| s.borrow().ethernet_address)
+    fn hardware_address(&self) -> driver::HardwareAddress {
+        self.shared.lock(|s| s.borrow().hardware_address)
     }
 
     fn link_state(&mut self, cx: &mut Context) -> LinkState {
@@ -301,6 +364,9 @@ impl<'d, const MTU: usize> embassy_net_driver::Driver for Device<'d, MTU> {
     }
 }
 
+/// A rx token.
+///
+/// Holds inbound receive channel and interfaces with embassy-net-driver.
 pub struct RxToken<'a, const MTU: usize> {
     rx: zerocopy_channel::Receiver<'a, NoopRawMutex, PacketBuf<MTU>>,
 }
@@ -311,13 +377,16 @@ impl<'a, const MTU: usize> embassy_net_driver::RxToken for RxToken<'a, MTU> {
         F: FnOnce(&mut [u8]) -> R,
     {
         // NOTE(unwrap): we checked the queue wasn't full when creating the token.
-        let pkt = unwrap!(self.rx.try_recv());
+        let pkt = unwrap!(self.rx.try_receive());
         let r = f(&mut pkt.buf[..pkt.len]);
-        self.rx.recv_done();
+        self.rx.receive_done();
         r
     }
 }
 
+/// A tx token.
+///
+/// Holds outbound transmit channel and interfaces with embassy-net-driver.
 pub struct TxToken<'a, const MTU: usize> {
     tx: zerocopy_channel::Sender<'a, NoopRawMutex, PacketBuf<MTU>>,
 }
@@ -333,217 +402,5 @@ impl<'a, const MTU: usize> embassy_net_driver::TxToken for TxToken<'a, MTU> {
         pkt.len = len;
         self.tx.send_done();
         r
-    }
-}
-
-mod zerocopy_channel {
-    use core::cell::RefCell;
-    use core::future::poll_fn;
-    use core::marker::PhantomData;
-    use core::task::{Context, Poll};
-
-    use embassy_sync::blocking_mutex::raw::RawMutex;
-    use embassy_sync::blocking_mutex::Mutex;
-    use embassy_sync::waitqueue::WakerRegistration;
-
-    pub struct Channel<'a, M: RawMutex, T> {
-        buf: *mut T,
-        phantom: PhantomData<&'a mut T>,
-        state: Mutex<M, RefCell<State>>,
-    }
-
-    impl<'a, M: RawMutex, T> Channel<'a, M, T> {
-        pub fn new(buf: &'a mut [T]) -> Self {
-            let len = buf.len();
-            assert!(len != 0);
-
-            Self {
-                buf: buf.as_mut_ptr(),
-                phantom: PhantomData,
-                state: Mutex::new(RefCell::new(State {
-                    len,
-                    front: 0,
-                    back: 0,
-                    full: false,
-                    send_waker: WakerRegistration::new(),
-                    recv_waker: WakerRegistration::new(),
-                })),
-            }
-        }
-
-        pub fn split(&mut self) -> (Sender<'_, M, T>, Receiver<'_, M, T>) {
-            (Sender { channel: self }, Receiver { channel: self })
-        }
-    }
-
-    pub struct Sender<'a, M: RawMutex, T> {
-        channel: &'a Channel<'a, M, T>,
-    }
-
-    impl<'a, M: RawMutex, T> Sender<'a, M, T> {
-        pub fn borrow(&mut self) -> Sender<'_, M, T> {
-            Sender { channel: self.channel }
-        }
-
-        pub fn try_send(&mut self) -> Option<&mut T> {
-            self.channel.state.lock(|s| {
-                let s = &mut *s.borrow_mut();
-                match s.push_index() {
-                    Some(i) => Some(unsafe { &mut *self.channel.buf.add(i) }),
-                    None => None,
-                }
-            })
-        }
-
-        pub fn poll_send(&mut self, cx: &mut Context) -> Poll<&mut T> {
-            self.channel.state.lock(|s| {
-                let s = &mut *s.borrow_mut();
-                match s.push_index() {
-                    Some(i) => Poll::Ready(unsafe { &mut *self.channel.buf.add(i) }),
-                    None => {
-                        s.recv_waker.register(cx.waker());
-                        Poll::Pending
-                    }
-                }
-            })
-        }
-
-        pub async fn send(&mut self) -> &mut T {
-            let i = poll_fn(|cx| {
-                self.channel.state.lock(|s| {
-                    let s = &mut *s.borrow_mut();
-                    match s.push_index() {
-                        Some(i) => Poll::Ready(i),
-                        None => {
-                            s.recv_waker.register(cx.waker());
-                            Poll::Pending
-                        }
-                    }
-                })
-            })
-            .await;
-            unsafe { &mut *self.channel.buf.add(i) }
-        }
-
-        pub fn send_done(&mut self) {
-            self.channel.state.lock(|s| s.borrow_mut().push_done())
-        }
-    }
-    pub struct Receiver<'a, M: RawMutex, T> {
-        channel: &'a Channel<'a, M, T>,
-    }
-
-    impl<'a, M: RawMutex, T> Receiver<'a, M, T> {
-        pub fn borrow(&mut self) -> Receiver<'_, M, T> {
-            Receiver { channel: self.channel }
-        }
-
-        pub fn try_recv(&mut self) -> Option<&mut T> {
-            self.channel.state.lock(|s| {
-                let s = &mut *s.borrow_mut();
-                match s.pop_index() {
-                    Some(i) => Some(unsafe { &mut *self.channel.buf.add(i) }),
-                    None => None,
-                }
-            })
-        }
-
-        pub fn poll_recv(&mut self, cx: &mut Context) -> Poll<&mut T> {
-            self.channel.state.lock(|s| {
-                let s = &mut *s.borrow_mut();
-                match s.pop_index() {
-                    Some(i) => Poll::Ready(unsafe { &mut *self.channel.buf.add(i) }),
-                    None => {
-                        s.send_waker.register(cx.waker());
-                        Poll::Pending
-                    }
-                }
-            })
-        }
-
-        pub async fn recv(&mut self) -> &mut T {
-            let i = poll_fn(|cx| {
-                self.channel.state.lock(|s| {
-                    let s = &mut *s.borrow_mut();
-                    match s.pop_index() {
-                        Some(i) => Poll::Ready(i),
-                        None => {
-                            s.send_waker.register(cx.waker());
-                            Poll::Pending
-                        }
-                    }
-                })
-            })
-            .await;
-            unsafe { &mut *self.channel.buf.add(i) }
-        }
-
-        pub fn recv_done(&mut self) {
-            self.channel.state.lock(|s| s.borrow_mut().pop_done())
-        }
-    }
-
-    struct State {
-        len: usize,
-
-        /// Front index. Always 0..=(N-1)
-        front: usize,
-        /// Back index. Always 0..=(N-1).
-        back: usize,
-
-        /// Used to distinguish "empty" and "full" cases when `front == back`.
-        /// May only be `true` if `front == back`, always `false` otherwise.
-        full: bool,
-
-        send_waker: WakerRegistration,
-        recv_waker: WakerRegistration,
-    }
-
-    impl State {
-        fn increment(&self, i: usize) -> usize {
-            if i + 1 == self.len {
-                0
-            } else {
-                i + 1
-            }
-        }
-
-        fn is_full(&self) -> bool {
-            self.full
-        }
-
-        fn is_empty(&self) -> bool {
-            self.front == self.back && !self.full
-        }
-
-        fn push_index(&mut self) -> Option<usize> {
-            match self.is_full() {
-                true => None,
-                false => Some(self.back),
-            }
-        }
-
-        fn push_done(&mut self) {
-            assert!(!self.is_full());
-            self.back = self.increment(self.back);
-            if self.back == self.front {
-                self.full = true;
-            }
-            self.send_waker.wake();
-        }
-
-        fn pop_index(&mut self) -> Option<usize> {
-            match self.is_empty() {
-                true => None,
-                false => Some(self.front),
-            }
-        }
-
-        fn pop_done(&mut self) {
-            assert!(!self.is_empty());
-            self.front = self.increment(self.front);
-            self.full = false;
-            self.recv_waker.wake();
-        }
     }
 }

@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use core::mem;
 
@@ -9,25 +8,23 @@ use embassy_executor::Spawner;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Stack, StackResources};
 use embassy_nrf::rng::Rng;
-use embassy_nrf::usb::{Driver, HardwareVbusDetect};
-use embassy_nrf::{interrupt, pac, peripherals};
+use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
+use embassy_nrf::usb::Driver;
+use embassy_nrf::{bind_interrupts, pac, peripherals, rng, usb};
 use embassy_usb::class::cdc_ncm::embassy_net::{Device, Runner, State as NetState};
 use embassy_usb::class::cdc_ncm::{CdcNcmClass, State};
 use embassy_usb::{Builder, Config, UsbDevice};
-use embedded_io::asynch::Write;
+use embedded_io_async::Write;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
-type MyDriver = Driver<'static, peripherals::USBD, HardwareVbusDetect>;
+bind_interrupts!(struct Irqs {
+    USBD => usb::InterruptHandler<peripherals::USBD>;
+    POWER_CLOCK => usb::vbus_detect::InterruptHandler;
+    RNG => rng::InterruptHandler<peripherals::RNG>;
+});
 
-macro_rules! singleton {
-    ($val:expr) => {{
-        type T = impl Sized;
-        static STATIC_CELL: StaticCell<T> = StaticCell::new();
-        let (x,) = STATIC_CELL.init(($val,));
-        x
-    }};
-}
+type MyDriver = Driver<'static, peripherals::USBD, HardwareVbusDetect>;
 
 const MTU: usize = 1514;
 
@@ -46,31 +43,8 @@ async fn net_task(stack: &'static Stack<Device<'static, MTU>>) -> ! {
     stack.run().await
 }
 
-#[inline(never)]
-pub fn test_function() -> (usize, u32, [u32; 2]) {
-    let mut array = [3; 2];
-
-    let mut index = 0;
-    let mut result = 0;
-
-    for x in [1, 2] {
-        if x == 1 {
-            array[1] = 99;
-        } else {
-            index = if x == 2 { 1 } else { 0 };
-
-            // grabs value from array[0], not array[1]
-            result = array[index];
-        }
-    }
-
-    (index, result, array)
-}
-
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    info!("{:?}", test_function());
-
     let p = embassy_nrf::init(Default::default());
     let clock: pac::CLOCK = unsafe { mem::transmute(()) };
 
@@ -79,9 +53,7 @@ async fn main(spawner: Spawner) {
     while clock.events_hfclkstarted.read().bits() != 1 {}
 
     // Create the driver, from the HAL.
-    let irq = interrupt::take!(USBD);
-    let power_irq = interrupt::take!(POWER_CLOCK);
-    let driver = Driver::new(p.USBD, irq, HardwareVbusDetect::new(power_irq));
+    let driver = Driver::new(p.USBD, Irqs, HardwareVbusDetect::new(Irqs));
 
     // Create embassy-usb Config
     let mut config = Config::new(0xc0de, 0xcafe);
@@ -98,13 +70,17 @@ async fn main(spawner: Spawner) {
     config.device_protocol = 0x01;
 
     // Create embassy-usb DeviceBuilder using the driver and config.
+    static CONFIG_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+    static BOS_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+    static MSOS_DESC: StaticCell<[u8; 128]> = StaticCell::new();
+    static CONTROL_BUF: StaticCell<[u8; 128]> = StaticCell::new();
     let mut builder = Builder::new(
         driver,
         config,
-        &mut singleton!([0; 256])[..],
-        &mut singleton!([0; 256])[..],
-        &mut singleton!([0; 256])[..],
-        &mut singleton!([0; 128])[..],
+        &mut CONFIG_DESC.init([0; 256])[..],
+        &mut BOS_DESC.init([0; 256])[..],
+        &mut MSOS_DESC.init([0; 128])[..],
+        &mut CONTROL_BUF.init([0; 128])[..],
     );
 
     // Our MAC addr.
@@ -113,31 +89,35 @@ async fn main(spawner: Spawner) {
     let host_mac_addr = [0x88, 0x88, 0x88, 0x88, 0x88, 0x88];
 
     // Create classes on the builder.
-    let class = CdcNcmClass::new(&mut builder, singleton!(State::new()), host_mac_addr, 64);
+    static STATE: StaticCell<State> = StaticCell::new();
+    let class = CdcNcmClass::new(&mut builder, STATE.init(State::new()), host_mac_addr, 64);
 
     // Build the builder.
     let usb = builder.build();
 
     unwrap!(spawner.spawn(usb_task(usb)));
 
-    let (runner, device) = class.into_embassy_net_device::<MTU, 4, 4>(singleton!(NetState::new()), our_mac_addr);
+    static NET_STATE: StaticCell<NetState<MTU, 4, 4>> = StaticCell::new();
+    let (runner, device) = class.into_embassy_net_device::<MTU, 4, 4>(NET_STATE.init(NetState::new()), our_mac_addr);
     unwrap!(spawner.spawn(usb_ncm_task(runner)));
 
-    let config = embassy_net::Config::Dhcp(Default::default());
-    //let config = embassy_net::Config::Static(embassy_net::StaticConfig {
+    let config = embassy_net::Config::dhcpv4(Default::default());
+    // let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
     //    address: Ipv4Cidr::new(Ipv4Address::new(10, 42, 0, 61), 24),
     //    dns_servers: Vec::new(),
     //    gateway: Some(Ipv4Address::new(10, 42, 0, 1)),
-    //});
+    // });
 
     // Generate random seed
-    let mut rng = Rng::new(p.RNG, interrupt::take!(RNG));
+    let mut rng = Rng::new(p.RNG, Irqs);
     let mut seed = [0; 8];
     rng.blocking_fill_bytes(&mut seed);
     let seed = u64::from_le_bytes(seed);
 
     // Init network stack
-    let stack = &*singleton!(Stack::new(device, config, singleton!(StackResources::<2>::new()), seed));
+    static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
+    static STACK: StaticCell<Stack<Device<'static, MTU>>> = StaticCell::new();
+    let stack = &*STACK.init(Stack::new(device, config, RESOURCES.init(StackResources::new()), seed));
 
     unwrap!(spawner.spawn(net_task(stack)));
 
@@ -149,7 +129,7 @@ async fn main(spawner: Spawner) {
 
     loop {
         let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        socket.set_timeout(Some(embassy_net::SmolDuration::from_secs(10)));
+        socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
 
         info!("Listening on TCP:1234...");
         if let Err(e) = socket.accept(1234).await {

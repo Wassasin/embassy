@@ -1,7 +1,7 @@
 use core::fmt;
 use core::ops::{Add, AddAssign, Sub, SubAssign};
 
-use super::{driver, Duration, GCD_1K, GCD_1M, TICK_HZ};
+use super::{Duration, GCD_1K, GCD_1M, TICK_HZ};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -18,7 +18,9 @@ impl Instant {
 
     /// Returns an Instant representing the current time.
     pub fn now() -> Instant {
-        Instant { ticks: driver::now() }
+        Instant {
+            ticks: embassy_time_driver::now(),
+        }
     }
 
     /// Create an Instant from a tick count since system boot.
@@ -71,7 +73,7 @@ impl Instant {
     /// Panics on over/underflow.
     pub fn duration_since(&self, earlier: Instant) -> Duration {
         Duration {
-            ticks: self.ticks.checked_sub(earlier.ticks).unwrap(),
+            ticks: unwrap!(self.ticks.checked_sub(earlier.ticks)),
         }
     }
 

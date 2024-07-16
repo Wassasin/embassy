@@ -2,4 +2,6 @@
 pub mod cdc_acm;
 pub mod cdc_ncm;
 pub mod hid;
+pub mod midi;
 pub mod msc;
+pub mod web_usb;

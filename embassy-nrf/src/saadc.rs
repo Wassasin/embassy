@@ -6,8 +6,8 @@ use core::future::poll_fn;
 use core::sync::atomic::{compiler_fence, Ordering};
 use core::task::Poll;
 
-use embassy_hal_common::drop::OnDrop;
-use embassy_hal_common::{impl_peripheral, into_ref, PeripheralRef};
+use embassy_hal_internal::drop::OnDrop;
+use embassy_hal_internal::{impl_peripheral, into_ref, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 use pac::{saadc, SAADC};
 use saadc::ch::config::{GAIN_A, REFSEL_A, RESP_A, TACQ_A};
@@ -16,7 +16,6 @@ pub(crate) use saadc::ch::pselp::PSELP_A as InputChannel;
 use saadc::oversample::OVERSAMPLE_A;
 use saadc::resolution::VAL_A;
 
-use self::sealed::Input as _;
 use crate::interrupt::InterruptExt;
 use crate::ppi::{ConfigurableChannel, Event, Ppi, Task};
 use crate::timer::{Frequency, Instance as TimerInstance, Timer};
@@ -28,9 +27,30 @@ use crate::{interrupt, pac, peripherals, Peripheral};
 #[non_exhaustive]
 pub enum Error {}
 
-/// One-shot and continuous SAADC.
-pub struct Saadc<'d, const N: usize> {
-    _p: PeripheralRef<'d, peripherals::SAADC>,
+/// Interrupt handler.
+pub struct InterruptHandler {
+    _private: (),
+}
+
+impl interrupt::typelevel::Handler<interrupt::typelevel::SAADC> for InterruptHandler {
+    unsafe fn on_interrupt() {
+        let r = unsafe { &*SAADC::ptr() };
+
+        if r.events_calibratedone.read().bits() != 0 {
+            r.intenclr.write(|w| w.calibratedone().clear());
+            WAKER.wake();
+        }
+
+        if r.events_end.read().bits() != 0 {
+            r.intenclr.write(|w| w.end().clear());
+            WAKER.wake();
+        }
+
+        if r.events_started.read().bits() != 0 {
+            r.intenclr.write(|w| w.started().clear());
+            WAKER.wake();
+        }
+    }
 }
 
 static WAKER: AtomicWaker = AtomicWaker::new();
@@ -114,15 +134,20 @@ pub enum CallbackResult {
     Stop,
 }
 
+/// One-shot and continuous SAADC.
+pub struct Saadc<'d, const N: usize> {
+    _p: PeripheralRef<'d, peripherals::SAADC>,
+}
+
 impl<'d, const N: usize> Saadc<'d, N> {
     /// Create a new SAADC driver.
     pub fn new(
         saadc: impl Peripheral<P = peripherals::SAADC> + 'd,
-        irq: impl Peripheral<P = interrupt::SAADC> + 'd,
+        _irq: impl interrupt::typelevel::Binding<interrupt::typelevel::SAADC, InterruptHandler> + 'd,
         config: Config,
         channel_configs: [ChannelConfig; N],
     ) -> Self {
-        into_ref!(saadc, irq);
+        into_ref!(saadc);
 
         let r = unsafe { &*SAADC::ptr() };
 
@@ -163,30 +188,10 @@ impl<'d, const N: usize> Saadc<'d, N> {
         // Disable all events interrupts
         r.intenclr.write(|w| unsafe { w.bits(0x003F_FFFF) });
 
-        irq.set_handler(Self::on_interrupt);
-        irq.unpend();
-        irq.enable();
+        interrupt::SAADC.unpend();
+        unsafe { interrupt::SAADC.enable() };
 
         Self { _p: saadc }
-    }
-
-    fn on_interrupt(_ctx: *mut ()) {
-        let r = Self::regs();
-
-        if r.events_calibratedone.read().bits() != 0 {
-            r.intenclr.write(|w| w.calibratedone().clear());
-            WAKER.wake();
-        }
-
-        if r.events_end.read().bits() != 0 {
-            r.intenclr.write(|w| w.end().clear());
-            WAKER.wake();
-        }
-
-        if r.events_started.read().bits() != 0 {
-            r.intenclr.write(|w| w.started().clear());
-            WAKER.wake();
-        }
     }
 
     fn regs() -> &'static saadc::RegisterBlock {
@@ -309,12 +314,14 @@ impl<'d, const N: usize> Saadc<'d, N> {
             Ppi::new_one_to_one(ppi_ch1, Event::from_reg(&r.events_end), Task::from_reg(&r.tasks_start));
         start_ppi.enable();
 
-        let mut timer = Timer::new(timer);
+        let timer = Timer::new(timer);
         timer.set_frequency(frequency);
         timer.cc(0).write(sample_counter);
         timer.cc(0).short_compare_clear();
 
-        let mut sample_ppi = Ppi::new_one_to_one(ppi_ch2, timer.cc(0).event_compare(), Task::from_reg(&r.tasks_sample));
+        let timer_cc = timer.cc(0);
+
+        let mut sample_ppi = Ppi::new_one_to_one(ppi_ch2, timer_cc.event_compare(), Task::from_reg(&r.tasks_sample));
 
         timer.start();
 
@@ -654,16 +661,13 @@ pub enum Resolution {
     _14BIT = 3,
 }
 
-pub(crate) mod sealed {
-    use super::*;
-
-    pub trait Input {
-        fn channel(&self) -> InputChannel;
-    }
+pub(crate) trait SealedInput {
+    fn channel(&self) -> InputChannel;
 }
 
 /// An input that can be used as either or negative end of a ADC differential in the SAADC periperhal.
-pub trait Input: sealed::Input + Into<AnyInput> + Peripheral<P = Self> + Sized + 'static {
+#[allow(private_bounds)]
+pub trait Input: SealedInput + Into<AnyInput> + Peripheral<P = Self> + Sized + 'static {
     /// Convert this SAADC input to a type-erased `AnyInput`.
     ///
     /// This allows using several inputs  in situations that might require
@@ -685,7 +689,7 @@ pub struct AnyInput {
 
 impl_peripheral!(AnyInput);
 
-impl sealed::Input for AnyInput {
+impl SealedInput for AnyInput {
     fn channel(&self) -> InputChannel {
         self.channel
     }
@@ -698,7 +702,7 @@ macro_rules! impl_saadc_input {
         impl_saadc_input!(@local, crate::peripherals::$pin, $ch);
     };
     (@local, $pin:ty, $ch:ident) => {
-        impl crate::saadc::sealed::Input for $pin {
+        impl crate::saadc::SealedInput for $pin {
             fn channel(&self) -> crate::saadc::InputChannel {
                 crate::saadc::InputChannel::$ch
             }

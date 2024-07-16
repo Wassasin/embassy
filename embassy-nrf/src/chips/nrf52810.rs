@@ -7,8 +7,9 @@ pub const FORCE_COPY_BUFFER_SIZE: usize = 256;
 pub const FLASH_SIZE: usize = 192 * 1024;
 
 pub const RESET_PIN: u32 = 21;
+pub const APPROTECT_MIN_BUILD_CODE: u8 = b'E';
 
-embassy_hal_common::peripherals! {
+embassy_hal_internal::peripherals! {
     // RTC
     RTC0,
     RTC1,
@@ -134,6 +135,13 @@ embassy_hal_common::peripherals! {
 
     // PDM
     PDM,
+
+    // Radio
+    RADIO,
+
+    // EGU
+    EGU0,
+    EGU1,
 }
 
 impl_uarte!(UARTE0, UARTE0, UARTE0_UART0);
@@ -147,6 +155,12 @@ impl_twim!(TWI0, TWIM0, TWIM0_TWIS0_TWI0);
 impl_twis!(TWI0, TWIS0, TWIM0_TWIS0_TWI0);
 
 impl_pwm!(PWM0, PWM0, PWM0);
+
+impl_pdm!(PDM, PDM, PDM);
+
+impl_qdec!(QDEC, QDEC, QDEC);
+
+impl_rng!(RNG, RNG, RNG);
 
 impl_timer!(TIMER0, TIMER0, TIMER0);
 impl_timer!(TIMER1, TIMER1, TIMER1);
@@ -228,36 +242,37 @@ impl_saadc_input!(P0_29, ANALOG_INPUT5);
 impl_saadc_input!(P0_30, ANALOG_INPUT6);
 impl_saadc_input!(P0_31, ANALOG_INPUT7);
 
-pub mod irqs {
-    use embassy_cortex_m::interrupt::_export::declare;
+impl_radio!(RADIO, RADIO, RADIO);
 
-    use crate::pac::Interrupt as InterruptEnum;
+impl_egu!(EGU0, EGU0, SWI0_EGU0);
+impl_egu!(EGU1, EGU1, SWI1_EGU1);
 
-    declare!(POWER_CLOCK);
-    declare!(RADIO);
-    declare!(UARTE0_UART0);
-    declare!(TWIM0_TWIS0_TWI0);
-    declare!(SPIM0_SPIS0_SPI0);
-    declare!(GPIOTE);
-    declare!(SAADC);
-    declare!(TIMER0);
-    declare!(TIMER1);
-    declare!(TIMER2);
-    declare!(RTC0);
-    declare!(TEMP);
-    declare!(RNG);
-    declare!(ECB);
-    declare!(CCM_AAR);
-    declare!(WDT);
-    declare!(RTC1);
-    declare!(QDEC);
-    declare!(COMP);
-    declare!(SWI0_EGU0);
-    declare!(SWI1_EGU1);
-    declare!(SWI2);
-    declare!(SWI3);
-    declare!(SWI4);
-    declare!(SWI5);
-    declare!(PWM0);
-    declare!(PDM);
-}
+embassy_hal_internal::interrupt_mod!(
+    POWER_CLOCK,
+    RADIO,
+    UARTE0_UART0,
+    TWIM0_TWIS0_TWI0,
+    SPIM0_SPIS0_SPI0,
+    GPIOTE,
+    SAADC,
+    TIMER0,
+    TIMER1,
+    TIMER2,
+    RTC0,
+    TEMP,
+    RNG,
+    ECB,
+    CCM_AAR,
+    WDT,
+    RTC1,
+    QDEC,
+    COMP,
+    SWI0_EGU0,
+    SWI1_EGU1,
+    SWI2,
+    SWI3,
+    SWI4,
+    SWI5,
+    PWM0,
+    PDM,
+);

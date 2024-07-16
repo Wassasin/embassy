@@ -1,14 +1,23 @@
+//! This example shows how to communicate asynchronous using i2c with external chips.
+//!
+//! Example written for the [`MCP23017 16-Bit I2C I/O Expander with Serial Interface`] chip.
+//! (https://www.microchip.com/en-us/product/mcp23017)
+
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_rp::i2c::{self, Config};
-use embassy_rp::interrupt;
-use embassy_time::{Duration, Timer};
+use embassy_rp::bind_interrupts;
+use embassy_rp::i2c::{self, Config, InterruptHandler};
+use embassy_rp::peripherals::I2C1;
+use embassy_time::Timer;
 use embedded_hal_async::i2c::I2c;
 use {defmt_rtt as _, panic_probe as _};
+
+bind_interrupts!(struct Irqs {
+    I2C1_IRQ => InterruptHandler<I2C1>;
+});
 
 #[allow(dead_code)]
 mod mcp23017 {
@@ -64,10 +73,9 @@ async fn main(_spawner: Spawner) {
 
     let sda = p.PIN_14;
     let scl = p.PIN_15;
-    let irq = interrupt::take!(I2C1_IRQ);
 
     info!("set up i2c ");
-    let mut i2c = i2c::I2c::new_async(p.I2C1, scl, sda, irq, Config::default());
+    let mut i2c = i2c::I2c::new_async(p.I2C1, scl, sda, Irqs, Config::default());
 
     use mcp23017::*;
 
@@ -97,6 +105,6 @@ async fn main(_spawner: Spawner) {
             }
         }
 
-        Timer::after(Duration::from_millis(100)).await;
+        Timer::after_millis(100).await;
     }
 }

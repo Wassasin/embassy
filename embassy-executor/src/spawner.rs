@@ -33,7 +33,8 @@ impl<S> SpawnToken<S> {
         }
     }
 
-    pub(crate) fn new_failed() -> Self {
+    /// Return a SpawnToken that represents a failed spawn.
+    pub fn new_failed() -> Self {
         Self {
             raw_task: None,
             phantom: PhantomData,
@@ -92,6 +93,7 @@ impl Spawner {
         poll_fn(|cx| {
             let task = raw::task_from_waker(cx.waker());
             let executor = unsafe { task.header().executor.get().unwrap_unchecked() };
+            let executor = unsafe { raw::Executor::wrap(executor) };
             Poll::Ready(Self::new(executor))
         })
         .await
@@ -113,9 +115,9 @@ impl Spawner {
         }
     }
 
-    // Used by the `embassy_macros::main!` macro to throw an error when spawn
+    // Used by the `embassy_executor_macros::main!` macro to throw an error when spawn
     // fails. This is here to allow conditional use of `defmt::unwrap!`
-    // without introducing a `defmt` feature in the `embassy_macros` package,
+    // without introducing a `defmt` feature in the `embassy_executor_macros` package,
     // which would require use of `-Z namespaced-features`.
     /// Spawn a task into an executor, panicking on failure.
     ///
@@ -130,9 +132,7 @@ impl Spawner {
     /// spawner to other threads, but the spawner loses the ability to spawn
     /// non-Send tasks.
     pub fn make_send(&self) -> SendSpawner {
-        SendSpawner {
-            executor: self.executor,
-        }
+        SendSpawner::new(&self.executor.inner)
     }
 }
 
@@ -145,14 +145,11 @@ impl Spawner {
 /// If you want to spawn non-Send tasks, use [Spawner].
 #[derive(Copy, Clone)]
 pub struct SendSpawner {
-    executor: &'static raw::Executor,
+    executor: &'static raw::SyncExecutor,
 }
 
-unsafe impl Send for SendSpawner {}
-unsafe impl Sync for SendSpawner {}
-
 impl SendSpawner {
-    pub(crate) fn new(executor: &'static raw::Executor) -> Self {
+    pub(crate) fn new(executor: &'static raw::SyncExecutor) -> Self {
         Self { executor }
     }
 

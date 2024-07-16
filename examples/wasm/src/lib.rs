@@ -1,8 +1,5 @@
-#![feature(type_alias_impl_trait)]
-#![allow(incomplete_features)]
-
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 
 #[embassy_executor::task]
 async fn ticker() {
@@ -20,7 +17,7 @@ async fn ticker() {
         log::info!("tick {}", counter);
         counter += 1;
 
-        Timer::after(Duration::from_secs(1)).await;
+        Timer::after_secs(1).await;
     }
 }
 

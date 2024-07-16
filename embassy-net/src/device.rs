@@ -1,7 +1,7 @@
 use core::task::Context;
 
-use embassy_net_driver::{Capabilities, Checksum, Driver, Medium, RxToken, TxToken};
-use smoltcp::phy;
+use embassy_net_driver::{Capabilities, Checksum, Driver, RxToken, TxToken};
+use smoltcp::phy::{self, Medium};
 use smoltcp::time::Instant;
 
 pub(crate) struct DriverAdapter<'d, 'c, T>
@@ -11,6 +11,7 @@ where
     // must be Some when actually using this to rx/tx
     pub cx: Option<&'d mut Context<'c>>,
     pub inner: &'d mut T,
+    pub medium: Medium,
 }
 
 impl<'d, 'c, T> phy::Device for DriverAdapter<'d, 'c, T>
@@ -22,13 +23,13 @@ where
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         self.inner
-            .receive(self.cx.as_deref_mut().unwrap())
+            .receive(unwrap!(self.cx.as_deref_mut()))
             .map(|(rx, tx)| (RxTokenAdapter(rx), TxTokenAdapter(tx)))
     }
 
     /// Construct a transmit token.
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        self.inner.transmit(self.cx.as_deref_mut().unwrap()).map(TxTokenAdapter)
+        self.inner.transmit(unwrap!(self.cx.as_deref_mut())).map(TxTokenAdapter)
     }
 
     /// Get a description of device capabilities.
@@ -46,20 +47,14 @@ where
 
         smolcaps.max_transmission_unit = caps.max_transmission_unit;
         smolcaps.max_burst_size = caps.max_burst_size;
-        smolcaps.medium = match caps.medium {
-            #[cfg(feature = "medium-ethernet")]
-            Medium::Ethernet => phy::Medium::Ethernet,
-            #[cfg(feature = "medium-ip")]
-            Medium::Ip => phy::Medium::Ip,
-            _ => panic!(
-                "Unsupported medium {:?}. MAke sure to enable it in embassy-net's Cargo features.",
-                caps.medium
-            ),
-        };
+        smolcaps.medium = self.medium;
         smolcaps.checksum.ipv4 = convert(caps.checksum.ipv4);
         smolcaps.checksum.tcp = convert(caps.checksum.tcp);
         smolcaps.checksum.udp = convert(caps.checksum.udp);
-        smolcaps.checksum.icmpv4 = convert(caps.checksum.icmpv4);
+        #[cfg(feature = "proto-ipv4")]
+        {
+            smolcaps.checksum.icmpv4 = convert(caps.checksum.icmpv4);
+        }
         #[cfg(feature = "proto-ipv6")]
         {
             smolcaps.checksum.icmpv6 = convert(caps.checksum.icmpv6);
@@ -81,7 +76,11 @@ where
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        self.0.consume(|buf| f(buf))
+        self.0.consume(|buf| {
+            #[cfg(feature = "packet-trace")]
+            trace!("rx: {:?}", buf);
+            f(buf)
+        })
     }
 }
 
@@ -97,6 +96,11 @@ where
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        self.0.consume(len, |buf| f(buf))
+        self.0.consume(len, |buf| {
+            let r = f(buf);
+            #[cfg(feature = "packet-trace")]
+            trace!("tx: {:?}", buf);
+            r
+        })
     }
 }

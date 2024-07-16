@@ -5,9 +5,9 @@ use core::{mem, ptr};
 use critical_section::CriticalSection;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::CriticalSectionMutex as Mutex;
-use embassy_time::driver::{AlarmHandle, Driver};
+use embassy_time_driver::{AlarmHandle, Driver};
 
-use crate::interrupt::{Interrupt, InterruptExt};
+use crate::interrupt::InterruptExt;
 use crate::{interrupt, pac};
 
 fn rtc() -> &'static pac::rtc0::RegisterBlock {
@@ -67,7 +67,7 @@ fn compare_n(n: usize) -> u32 {
     1 << (n + 16)
 }
 
-#[cfg(tests)]
+#[cfg(test)]
 mod test {
     use super::*;
 
@@ -119,7 +119,7 @@ struct RtcDriver {
 }
 
 const ALARM_STATE_NEW: AlarmState = AlarmState::new();
-embassy_time::time_driver_impl!(static DRIVER: RtcDriver = RtcDriver {
+embassy_time_driver::time_driver_impl!(static DRIVER: RtcDriver = RtcDriver {
     period: AtomicU32::new(0),
     alarm_count: AtomicU8::new(0),
     alarms: Mutex::const_new(CriticalSectionRawMutex::new(), [ALARM_STATE_NEW; ALARM_COUNT]),
@@ -142,9 +142,8 @@ impl RtcDriver {
         // Wait for clear
         while r.counter.read().bits() != 0 {}
 
-        let irq = unsafe { interrupt::RTC1::steal() };
-        irq.set_priority(irq_prio);
-        irq.enable();
+        interrupt::RTC1.set_priority(irq_prio);
+        unsafe { interrupt::RTC1.enable() };
     }
 
     fn on_interrupt(&self) {
@@ -172,7 +171,8 @@ impl RtcDriver {
     fn next_period(&self) {
         critical_section::with(|cs| {
             let r = rtc();
-            let period = self.period.fetch_add(1, Ordering::Relaxed) + 1;
+            let period = self.period.load(Ordering::Relaxed) + 1;
+            self.period.store(period, Ordering::Relaxed);
             let t = (period as u64) << 23;
 
             for n in 0..ALARM_COUNT {
@@ -220,18 +220,15 @@ impl Driver for RtcDriver {
     }
 
     unsafe fn allocate_alarm(&self) -> Option<AlarmHandle> {
-        let id = self.alarm_count.fetch_update(Ordering::AcqRel, Ordering::Acquire, |x| {
-            if x < ALARM_COUNT as u8 {
-                Some(x + 1)
+        critical_section::with(|_| {
+            let id = self.alarm_count.load(Ordering::Relaxed);
+            if id < ALARM_COUNT as u8 {
+                self.alarm_count.store(id + 1, Ordering::Relaxed);
+                Some(AlarmHandle::new(id))
             } else {
                 None
             }
-        });
-
-        match id {
-            Ok(id) => Some(AlarmHandle::new(id)),
-            Err(_) => None,
-        }
+        })
     }
 
     fn set_alarm_callback(&self, alarm: AlarmHandle, callback: fn(*mut ()), ctx: *mut ()) {
@@ -296,6 +293,7 @@ impl Driver for RtcDriver {
     }
 }
 
+#[cfg(feature = "rt")]
 #[interrupt]
 fn RTC1() {
     DRIVER.on_interrupt()

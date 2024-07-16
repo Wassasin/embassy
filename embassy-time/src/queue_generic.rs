@@ -2,12 +2,11 @@ use core::cell::RefCell;
 use core::cmp::{min, Ordering};
 use core::task::Waker;
 
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::blocking_mutex::Mutex;
+use critical_section::Mutex;
+use embassy_time_driver::{allocate_alarm, set_alarm, set_alarm_callback, AlarmHandle};
+use embassy_time_queue_driver::TimerQueue;
 use heapless::Vec;
 
-use crate::driver::{allocate_alarm, set_alarm, set_alarm_callback, AlarmHandle};
-use crate::queue::TimerQueue;
 use crate::Instant;
 
 #[cfg(feature = "generic-queue-8")]
@@ -17,7 +16,7 @@ const QUEUE_SIZE: usize = 16;
 #[cfg(feature = "generic-queue-32")]
 const QUEUE_SIZE: usize = 32;
 #[cfg(feature = "generic-queue-64")]
-const QUEUE_SIZE: usize = 32;
+const QUEUE_SIZE: usize = 64;
 #[cfg(feature = "generic-queue-128")]
 const QUEUE_SIZE: usize = 128;
 #[cfg(not(any(
@@ -65,7 +64,7 @@ impl InnerQueue {
         self.queue
             .iter_mut()
             .find(|timer| timer.waker.will_wake(waker))
-            .map(|mut timer| {
+            .map(|timer| {
                 timer.at = min(timer.at, at);
             })
             .unwrap_or_else(|| {
@@ -129,7 +128,7 @@ impl InnerQueue {
 }
 
 struct Queue {
-    inner: Mutex<CriticalSectionRawMutex, RefCell<Option<InnerQueue>>>,
+    inner: Mutex<RefCell<Option<InnerQueue>>>,
 }
 
 impl Queue {
@@ -140,8 +139,8 @@ impl Queue {
     }
 
     fn schedule_wake(&'static self, at: Instant, waker: &Waker) {
-        self.inner.lock(|inner| {
-            let mut inner = inner.borrow_mut();
+        critical_section::with(|cs| {
+            let mut inner = self.inner.borrow_ref_mut(cs);
 
             if inner.is_none() {}
 
@@ -159,8 +158,7 @@ impl Queue {
     }
 
     fn handle_alarm(&self) {
-        self.inner
-            .lock(|inner| inner.borrow_mut().as_mut().unwrap().handle_alarm());
+        critical_section::with(|cs| self.inner.borrow_ref_mut(cs).as_mut().unwrap().handle_alarm())
     }
 
     fn handle_alarm_callback(ctx: *mut ()) {
@@ -169,164 +167,64 @@ impl Queue {
 }
 
 impl TimerQueue for Queue {
-    fn schedule_wake(&'static self, at: Instant, waker: &Waker) {
-        Queue::schedule_wake(self, at, waker);
+    fn schedule_wake(&'static self, at: u64, waker: &Waker) {
+        Queue::schedule_wake(self, Instant::from_ticks(at), waker);
     }
 }
 
-crate::timer_queue_impl!(static QUEUE: Queue = Queue::new());
+embassy_time_queue_driver::timer_queue_impl!(static QUEUE: Queue = Queue::new());
 
 #[cfg(test)]
+#[cfg(feature = "mock-driver")]
 mod tests {
-    use core::cell::Cell;
-    use core::task::{RawWaker, RawWakerVTable, Waker};
-    use std::rc::Rc;
-    use std::sync::Mutex;
+    use core::sync::atomic::{AtomicBool, Ordering};
+    use core::task::Waker;
+    use std::sync::Arc;
+    use std::task::Wake;
 
     use serial_test::serial;
 
-    use super::InnerQueue;
-    use crate::driver::{AlarmHandle, Driver};
+    use crate::driver_mock::MockDriver;
     use crate::queue_generic::QUEUE;
-    use crate::Instant;
-
-    struct InnerTestDriver {
-        now: u64,
-        alarm: u64,
-        callback: fn(*mut ()),
-        ctx: *mut (),
-    }
-
-    impl InnerTestDriver {
-        const fn new() -> Self {
-            Self {
-                now: 0,
-                alarm: u64::MAX,
-                callback: Self::noop,
-                ctx: core::ptr::null_mut(),
-            }
-        }
-
-        fn noop(_ctx: *mut ()) {}
-    }
-
-    unsafe impl Send for InnerTestDriver {}
-
-    struct TestDriver(Mutex<InnerTestDriver>);
-
-    impl TestDriver {
-        const fn new() -> Self {
-            Self(Mutex::new(InnerTestDriver::new()))
-        }
-
-        fn reset(&self) {
-            *self.0.lock().unwrap() = InnerTestDriver::new();
-        }
-
-        fn set_now(&self, now: u64) {
-            let notify = {
-                let mut inner = self.0.lock().unwrap();
-
-                if inner.now < now {
-                    inner.now = now;
-
-                    if inner.alarm <= now {
-                        inner.alarm = u64::MAX;
-
-                        Some((inner.callback, inner.ctx))
-                    } else {
-                        None
-                    }
-                } else {
-                    panic!("Going back in time?");
-                }
-            };
-
-            if let Some((callback, ctx)) = notify {
-                (callback)(ctx);
-            }
-        }
-    }
-
-    impl Driver for TestDriver {
-        fn now(&self) -> u64 {
-            self.0.lock().unwrap().now
-        }
-
-        unsafe fn allocate_alarm(&self) -> Option<AlarmHandle> {
-            Some(AlarmHandle::new(0))
-        }
-
-        fn set_alarm_callback(&self, _alarm: AlarmHandle, callback: fn(*mut ()), ctx: *mut ()) {
-            let mut inner = self.0.lock().unwrap();
-
-            inner.callback = callback;
-            inner.ctx = ctx;
-        }
-
-        fn set_alarm(&self, _alarm: AlarmHandle, timestamp: u64) -> bool {
-            let mut inner = self.0.lock().unwrap();
-
-            if timestamp <= inner.now {
-                false
-            } else {
-                inner.alarm = timestamp;
-                true
-            }
-        }
-    }
+    use crate::{Duration, Instant};
 
     struct TestWaker {
-        pub awoken: Rc<Cell<bool>>,
-        pub waker: Waker,
+        pub awoken: AtomicBool,
     }
 
-    impl TestWaker {
-        fn new() -> Self {
-            let flag = Rc::new(Cell::new(false));
+    impl Wake for TestWaker {
+        fn wake(self: Arc<Self>) {
+            self.awoken.store(true, Ordering::Relaxed);
+        }
 
-            const VTABLE: RawWakerVTable = RawWakerVTable::new(
-                |data: *const ()| {
-                    unsafe {
-                        Rc::increment_strong_count(data as *const Cell<bool>);
-                    }
-
-                    RawWaker::new(data as _, &VTABLE)
-                },
-                |data: *const ()| unsafe {
-                    let data = data as *const Cell<bool>;
-                    data.as_ref().unwrap().set(true);
-                    Rc::decrement_strong_count(data);
-                },
-                |data: *const ()| unsafe {
-                    (data as *const Cell<bool>).as_ref().unwrap().set(true);
-                },
-                |data: *const ()| unsafe {
-                    Rc::decrement_strong_count(data);
-                },
-            );
-
-            let raw = RawWaker::new(Rc::into_raw(flag.clone()) as _, &VTABLE);
-
-            Self {
-                awoken: flag.clone(),
-                waker: unsafe { Waker::from_raw(raw) },
-            }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.awoken.store(true, Ordering::Relaxed);
         }
     }
 
-    crate::time_driver_impl!(static DRIVER: TestDriver = TestDriver::new());
+    fn test_waker() -> (Arc<TestWaker>, Waker) {
+        let arc = Arc::new(TestWaker {
+            awoken: AtomicBool::new(false),
+        });
+        let waker = Waker::from(arc.clone());
+
+        (arc, waker)
+    }
 
     fn setup() {
-        DRIVER.reset();
-
-        QUEUE.inner.lock(|inner| {
-            *inner.borrow_mut() = InnerQueue::new();
-        });
+        MockDriver::get().reset();
+        critical_section::with(|cs| *QUEUE.inner.borrow_ref_mut(cs) = None);
     }
 
     fn queue_len() -> usize {
-        QUEUE.inner.lock(|inner| inner.borrow().queue.iter().count())
+        critical_section::with(|cs| {
+            QUEUE
+                .inner
+                .borrow_ref(cs)
+                .as_ref()
+                .map(|inner| inner.queue.iter().count())
+                .unwrap_or(0)
+        })
     }
 
     #[test]
@@ -336,11 +234,11 @@ mod tests {
 
         assert_eq!(queue_len(), 0);
 
-        let waker = TestWaker::new();
+        let (flag, waker) = test_waker();
 
-        QUEUE.schedule_wake(Instant::from_secs(1), &waker.waker);
+        QUEUE.schedule_wake(Instant::from_secs(1), &waker);
 
-        assert!(!waker.awoken.get());
+        assert!(!flag.awoken.load(Ordering::Relaxed));
         assert_eq!(queue_len(), 1);
     }
 
@@ -349,23 +247,23 @@ mod tests {
     fn test_schedule_same() {
         setup();
 
-        let waker = TestWaker::new();
+        let (_flag, waker) = test_waker();
 
-        QUEUE.schedule_wake(Instant::from_secs(1), &waker.waker);
-
-        assert_eq!(queue_len(), 1);
-
-        QUEUE.schedule_wake(Instant::from_secs(1), &waker.waker);
+        QUEUE.schedule_wake(Instant::from_secs(1), &waker);
 
         assert_eq!(queue_len(), 1);
 
-        QUEUE.schedule_wake(Instant::from_secs(100), &waker.waker);
+        QUEUE.schedule_wake(Instant::from_secs(1), &waker);
 
         assert_eq!(queue_len(), 1);
 
-        let waker2 = TestWaker::new();
+        QUEUE.schedule_wake(Instant::from_secs(100), &waker);
 
-        QUEUE.schedule_wake(Instant::from_secs(100), &waker2.waker);
+        assert_eq!(queue_len(), 1);
+
+        let (_flag2, waker2) = test_waker();
+
+        QUEUE.schedule_wake(Instant::from_secs(100), &waker2);
 
         assert_eq!(queue_len(), 2);
     }
@@ -375,21 +273,21 @@ mod tests {
     fn test_trigger() {
         setup();
 
-        let waker = TestWaker::new();
+        let (flag, waker) = test_waker();
 
-        QUEUE.schedule_wake(Instant::from_secs(100), &waker.waker);
+        QUEUE.schedule_wake(Instant::from_secs(100), &waker);
 
-        assert!(!waker.awoken.get());
+        assert!(!flag.awoken.load(Ordering::Relaxed));
 
-        DRIVER.set_now(Instant::from_secs(99).as_ticks());
+        MockDriver::get().advance(Duration::from_secs(99));
 
-        assert!(!waker.awoken.get());
+        assert!(!flag.awoken.load(Ordering::Relaxed));
 
         assert_eq!(queue_len(), 1);
 
-        DRIVER.set_now(Instant::from_secs(100).as_ticks());
+        MockDriver::get().advance(Duration::from_secs(1));
 
-        assert!(waker.awoken.get());
+        assert!(flag.awoken.load(Ordering::Relaxed));
 
         assert_eq!(queue_len(), 0);
     }
@@ -399,18 +297,18 @@ mod tests {
     fn test_immediate_trigger() {
         setup();
 
-        let waker = TestWaker::new();
+        let (flag, waker) = test_waker();
 
-        QUEUE.schedule_wake(Instant::from_secs(100), &waker.waker);
+        QUEUE.schedule_wake(Instant::from_secs(100), &waker);
 
-        DRIVER.set_now(Instant::from_secs(50).as_ticks());
+        MockDriver::get().advance(Duration::from_secs(50));
 
-        let waker2 = TestWaker::new();
+        let (flag2, waker2) = test_waker();
 
-        QUEUE.schedule_wake(Instant::from_secs(40), &waker2.waker);
+        QUEUE.schedule_wake(Instant::from_secs(40), &waker2);
 
-        assert!(!waker.awoken.get());
-        assert!(waker2.awoken.get());
+        assert!(!flag.awoken.load(Ordering::Relaxed));
+        assert!(flag2.awoken.load(Ordering::Relaxed));
         assert_eq!(queue_len(), 1);
     }
 
@@ -420,30 +318,31 @@ mod tests {
         setup();
 
         for i in 1..super::QUEUE_SIZE {
-            let waker = TestWaker::new();
+            let (flag, waker) = test_waker();
 
-            QUEUE.schedule_wake(Instant::from_secs(310), &waker.waker);
+            QUEUE.schedule_wake(Instant::from_secs(310), &waker);
 
             assert_eq!(queue_len(), i);
-            assert!(!waker.awoken.get());
+            assert!(!flag.awoken.load(Ordering::Relaxed));
         }
 
-        let first_waker = TestWaker::new();
+        let (flag, waker) = test_waker();
 
-        QUEUE.schedule_wake(Instant::from_secs(300), &first_waker.waker);
-
-        assert_eq!(queue_len(), super::QUEUE_SIZE);
-        assert!(!first_waker.awoken.get());
-
-        let second_waker = TestWaker::new();
-
-        QUEUE.schedule_wake(Instant::from_secs(305), &second_waker.waker);
+        QUEUE.schedule_wake(Instant::from_secs(300), &waker);
 
         assert_eq!(queue_len(), super::QUEUE_SIZE);
-        assert!(first_waker.awoken.get());
+        assert!(!flag.awoken.load(Ordering::Relaxed));
 
-        QUEUE.schedule_wake(Instant::from_secs(320), &TestWaker::new().waker);
+        let (flag2, waker2) = test_waker();
+
+        QUEUE.schedule_wake(Instant::from_secs(305), &waker2);
+
         assert_eq!(queue_len(), super::QUEUE_SIZE);
-        assert!(second_waker.awoken.get());
+        assert!(flag.awoken.load(Ordering::Relaxed));
+
+        let (_flag3, waker3) = test_waker();
+        QUEUE.schedule_wake(Instant::from_secs(320), &waker3);
+        assert_eq!(queue_len(), super::QUEUE_SIZE);
+        assert!(flag2.awoken.load(Ordering::Relaxed));
     }
 }

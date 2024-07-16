@@ -1,28 +1,12 @@
-#![feature(type_alias_impl_trait)]
-
-use std::default::Default;
-
 use clap::Parser;
 use embassy_executor::{Executor, Spawner};
 use embassy_net::dns::DnsQueryType;
 use embassy_net::{Config, Ipv4Address, Ipv4Cidr, Stack, StackResources};
+use embassy_net_tuntap::TunTapDevice;
 use heapless::Vec;
 use log::*;
 use rand_core::{OsRng, RngCore};
 use static_cell::StaticCell;
-
-#[path = "../tuntap.rs"]
-mod tuntap;
-
-use crate::tuntap::TunTapDevice;
-
-macro_rules! singleton {
-    ($val:expr) => {{
-        type T = impl Sized;
-        static STATIC_CELL: StaticCell<T> = StaticCell::new();
-        STATIC_CELL.init_with(move || $val)
-    }};
-}
 
 #[derive(Parser)]
 #[clap(version = "1.0")]
@@ -49,14 +33,14 @@ async fn main_task(spawner: Spawner) {
 
     // Choose between dhcp or static ip
     let config = if opts.static_ip {
-        Config::Static(embassy_net::StaticConfig {
+        Config::ipv4_static(embassy_net::StaticConfigV4 {
             address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 1), 24),
             dns_servers: Vec::from_slice(&[Ipv4Address::new(8, 8, 4, 4).into(), Ipv4Address::new(8, 8, 8, 8).into()])
                 .unwrap(),
             gateway: Some(Ipv4Address::new(192, 168, 69, 100)),
         })
     } else {
-        Config::Dhcp(Default::default())
+        Config::dhcpv4(Default::default())
     };
 
     // Generate random seed
@@ -65,7 +49,14 @@ async fn main_task(spawner: Spawner) {
     let seed = u64::from_le_bytes(seed);
 
     // Init network stack
-    let stack: &Stack<_> = &*singleton!(Stack::new(device, config, singleton!(StackResources::<3>::new()), seed));
+    static STACK: StaticCell<Stack<TunTapDevice>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+    let stack: &Stack<_> = &*STACK.init(Stack::new(
+        device,
+        config,
+        RESOURCES.init(StackResources::<3>::new()),
+        seed,
+    ));
 
     // Launch network task
     spawner.spawn(net_task(stack)).unwrap();

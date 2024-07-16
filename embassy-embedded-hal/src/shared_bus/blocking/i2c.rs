@@ -2,13 +2,12 @@
 //!
 //! # Example (nrf52)
 //!
-//! ```rust
+//! ```rust,ignore
 //! use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 //! use embassy_sync::blocking_mutex::{NoopMutex, raw::NoopRawMutex};
 //!
 //! static I2C_BUS: StaticCell<NoopMutex<RefCell<Twim<TWISPI0>>>> = StaticCell::new();
-//! let irq = interrupt::take!(SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0);
-//! let i2c = Twim::new(p.TWISPI0, irq, p.P0_03, p.P0_04, Config::default());
+//! let i2c = Twim::new(p.TWISPI0, Irqs, p.P0_03, p.P0_04, Config::default());
 //! let i2c_bus = NoopMutex::new(RefCell::new(i2c));
 //! let i2c_bus = I2C_BUS.init(i2c_bus);
 //!
@@ -68,37 +67,11 @@ where
     }
 
     fn transaction<'a>(&mut self, address: u8, operations: &mut [Operation<'a>]) -> Result<(), Self::Error> {
-        let _ = address;
-        let _ = operations;
-        todo!()
-    }
-
-    fn write_iter<B: IntoIterator<Item = u8>>(&mut self, addr: u8, bytes: B) -> Result<(), Self::Error> {
-        let _ = addr;
-        let _ = bytes;
-        todo!()
-    }
-
-    fn write_iter_read<B: IntoIterator<Item = u8>>(
-        &mut self,
-        addr: u8,
-        bytes: B,
-        buffer: &mut [u8],
-    ) -> Result<(), Self::Error> {
-        let _ = addr;
-        let _ = bytes;
-        let _ = buffer;
-        todo!()
-    }
-
-    fn transaction_iter<'a, O: IntoIterator<Item = Operation<'a>>>(
-        &mut self,
-        address: u8,
-        operations: O,
-    ) -> Result<(), Self::Error> {
-        let _ = address;
-        let _ = operations;
-        todo!()
+        self.bus.lock(|bus| {
+            bus.borrow_mut()
+                .transaction(address, operations)
+                .map_err(I2cDeviceError::I2c)
+        })
     }
 }
 
@@ -159,6 +132,11 @@ impl<'a, M: RawMutex, BUS: SetConfig> I2cDeviceWithConfig<'a, M, BUS> {
     pub fn new(bus: &'a Mutex<M, RefCell<BUS>>, config: BUS::Config) -> Self {
         Self { bus, config }
     }
+
+    /// Change the device's config at runtime
+    pub fn set_config(&mut self, config: BUS::Config) {
+        self.config = config;
+    }
 }
 
 impl<'a, M, BUS> ErrorType for I2cDeviceWithConfig<'a, M, BUS>
@@ -177,7 +155,7 @@ where
     fn read(&mut self, address: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
         self.bus.lock(|bus| {
             let mut bus = bus.borrow_mut();
-            bus.set_config(&self.config);
+            bus.set_config(&self.config).map_err(|_| I2cDeviceError::Config)?;
             bus.read(address, buffer).map_err(I2cDeviceError::I2c)
         })
     }
@@ -185,7 +163,7 @@ where
     fn write(&mut self, address: u8, bytes: &[u8]) -> Result<(), Self::Error> {
         self.bus.lock(|bus| {
             let mut bus = bus.borrow_mut();
-            bus.set_config(&self.config);
+            bus.set_config(&self.config).map_err(|_| I2cDeviceError::Config)?;
             bus.write(address, bytes).map_err(I2cDeviceError::I2c)
         })
     }
@@ -193,43 +171,17 @@ where
     fn write_read(&mut self, address: u8, wr_buffer: &[u8], rd_buffer: &mut [u8]) -> Result<(), Self::Error> {
         self.bus.lock(|bus| {
             let mut bus = bus.borrow_mut();
-            bus.set_config(&self.config);
+            bus.set_config(&self.config).map_err(|_| I2cDeviceError::Config)?;
             bus.write_read(address, wr_buffer, rd_buffer)
                 .map_err(I2cDeviceError::I2c)
         })
     }
 
     fn transaction<'a>(&mut self, address: u8, operations: &mut [Operation<'a>]) -> Result<(), Self::Error> {
-        let _ = address;
-        let _ = operations;
-        todo!()
-    }
-
-    fn write_iter<B: IntoIterator<Item = u8>>(&mut self, addr: u8, bytes: B) -> Result<(), Self::Error> {
-        let _ = addr;
-        let _ = bytes;
-        todo!()
-    }
-
-    fn write_iter_read<B: IntoIterator<Item = u8>>(
-        &mut self,
-        addr: u8,
-        bytes: B,
-        buffer: &mut [u8],
-    ) -> Result<(), Self::Error> {
-        let _ = addr;
-        let _ = bytes;
-        let _ = buffer;
-        todo!()
-    }
-
-    fn transaction_iter<'a, O: IntoIterator<Item = Operation<'a>>>(
-        &mut self,
-        address: u8,
-        operations: O,
-    ) -> Result<(), Self::Error> {
-        let _ = address;
-        let _ = operations;
-        todo!()
+        self.bus.lock(|bus| {
+            let mut bus = bus.borrow_mut();
+            bus.set_config(&self.config).map_err(|_| I2cDeviceError::Config)?;
+            bus.transaction(address, operations).map_err(I2cDeviceError::I2c)
+        })
     }
 }

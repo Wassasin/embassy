@@ -1,10 +1,10 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_stm32::dac::{Channel, Dac, Value};
+use embassy_stm32::dac::{DacCh1, Value};
+use embassy_stm32::dma::NoDma;
 use {defmt_rtt as _, panic_probe as _};
 
 #[embassy_executor::main]
@@ -12,12 +12,11 @@ async fn main(_spawner: Spawner) -> ! {
     let p = embassy_stm32::init(Default::default());
     info!("Hello World, dude!");
 
-    let mut dac = Dac::new_1ch(p.DAC, p.PA4);
+    let mut dac = DacCh1::new(p.DAC1, NoDma, p.PA4);
 
     loop {
         for v in 0..=255 {
-            unwrap!(dac.set(Channel::Ch1, Value::Bit8(to_sine_wave(v))));
-            unwrap!(dac.trigger(Channel::Ch1));
+            dac.set(Value::Bit8(to_sine_wave(v)));
         }
     }
 }

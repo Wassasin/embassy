@@ -1,11 +1,15 @@
+//! This example shows how to communicate using i2c with external chips.
+//!
+//! Example written for the [`MCP23017 16-Bit I2C I/O Expander with Serial Interface`] chip.
+//! (https://www.microchip.com/en-us/product/mcp23017)
+
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_rp::i2c::{self, Config};
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 use embedded_hal_1::i2c::I2c;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -65,6 +69,6 @@ async fn main(_spawner: Spawner) {
         info!("portb = {:02x}", portb[0]);
         val = !val;
 
-        Timer::after(Duration::from_secs(1)).await;
+        Timer::after_secs(1).await;
     }
 }

@@ -1,20 +1,25 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use core::mem;
 
 use defmt::{info, panic};
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_nrf::usb::{Driver, HardwareVbusDetect, Instance, VbusDetect};
-use embassy_nrf::{interrupt, pac};
+use embassy_nrf::usb::vbus_detect::{HardwareVbusDetect, VbusDetect};
+use embassy_nrf::usb::{Driver, Instance};
+use embassy_nrf::{bind_interrupts, pac, peripherals, usb};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::msos::{self, windows_version};
 use embassy_usb::types::InterfaceNumber;
 use embassy_usb::{Builder, Config};
 use {defmt_rtt as _, panic_probe as _};
+
+bind_interrupts!(struct Irqs {
+    USBD => usb::InterruptHandler<peripherals::USBD>;
+    POWER_CLOCK => usb::vbus_detect::InterruptHandler;
+});
 
 // This is a randomly generated GUID to allow clients on Windows to find our device
 const DEVICE_INTERFACE_GUIDS: &[&str] = &["{EAA9A5DC-30BA-44BC-9232-606CDC875321}"];
@@ -29,9 +34,7 @@ async fn main(_spawner: Spawner) {
     while clock.events_hfclkstarted.read().bits() != 1 {}
 
     // Create the driver, from the HAL.
-    let irq = interrupt::take!(USBD);
-    let power_irq = interrupt::take!(POWER_CLOCK);
-    let driver = Driver::new(p.USBD, irq, HardwareVbusDetect::new(power_irq));
+    let driver = Driver::new(p.USBD, Irqs, HardwareVbusDetect::new(Irqs));
 
     // Create embassy-usb Config
     let mut config = Config::new(0xc0de, 0xcafe);
@@ -41,7 +44,7 @@ async fn main(_spawner: Spawner) {
     config.max_power = 100;
     config.max_packet_size_0 = 64;
 
-    // Required for windows compatiblity.
+    // Required for windows compatibility.
     // https://developer.nordicsemi.com/nRF_Connect_SDK/doc/1.9.1/kconfig/CONFIG_CDC_ACM_IAD.html#help
     config.device_class = 0xEF;
     config.device_sub_class = 0x02;
@@ -50,7 +53,6 @@ async fn main(_spawner: Spawner) {
 
     // Create embassy-usb DeviceBuilder using the driver and config.
     // It needs some buffers for building the descriptors.
-    let mut device_descriptor = [0; 256];
     let mut config_descriptor = [0; 256];
     let mut bos_descriptor = [0; 256];
     let mut msos_descriptor = [0; 256];
@@ -61,7 +63,6 @@ async fn main(_spawner: Spawner) {
     let mut builder = Builder::new(
         driver,
         config,
-        &mut device_descriptor,
         &mut config_descriptor,
         &mut bos_descriptor,
         &mut msos_descriptor,

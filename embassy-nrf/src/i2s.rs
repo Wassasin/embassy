@@ -6,18 +6,18 @@ use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{compiler_fence, Ordering};
+use core::sync::atomic::{compiler_fence, AtomicBool, Ordering};
 use core::task::Poll;
 
-use embassy_cortex_m::interrupt::InterruptExt;
-use embassy_hal_common::drop::OnDrop;
-use embassy_hal_common::{into_ref, PeripheralRef};
+use embassy_hal_internal::drop::OnDrop;
+use embassy_hal_internal::{into_ref, PeripheralRef};
+use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::gpio::{AnyPin, Pin as GpioPin};
-use crate::interrupt::Interrupt;
+use crate::interrupt::typelevel::Interrupt;
 use crate::pac::i2s::RegisterBlock;
-use crate::util::{slice_in_ram_or, slice_ptr_parts};
-use crate::{Peripheral, EASY_DMA_SIZE};
+use crate::util::slice_in_ram_or;
+use crate::{interrupt, Peripheral, EASY_DMA_SIZE};
 
 /// Type alias for `MultiBuffering` with 2 buffers.
 pub type DoubleBuffering<S, const NS: usize> = MultiBuffering<S, 2, NS>;
@@ -363,10 +363,39 @@ impl From<Channels> for u8 {
     }
 }
 
+/// Interrupt handler.
+pub struct InterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        let device = Device::<T>::new();
+        let s = T::state();
+
+        if device.is_tx_ptr_updated() {
+            trace!("TX INT");
+            s.tx_waker.wake();
+            device.disable_tx_ptr_interrupt();
+        }
+
+        if device.is_rx_ptr_updated() {
+            trace!("RX INT");
+            s.rx_waker.wake();
+            device.disable_rx_ptr_interrupt();
+        }
+
+        if device.is_stopped() {
+            trace!("STOPPED INT");
+            s.stop_waker.wake();
+            device.disable_stopped_interrupt();
+        }
+    }
+}
+
 /// I2S driver.
 pub struct I2S<'d, T: Instance> {
     i2s: PeripheralRef<'d, T>,
-    irq: PeripheralRef<'d, T::Interrupt>,
     mck: Option<PeripheralRef<'d, AnyPin>>,
     sck: PeripheralRef<'d, AnyPin>,
     lrck: PeripheralRef<'d, AnyPin>,
@@ -378,19 +407,18 @@ pub struct I2S<'d, T: Instance> {
 
 impl<'d, T: Instance> I2S<'d, T> {
     /// Create a new I2S in master mode
-    pub fn master(
+    pub fn new_master(
         i2s: impl Peripheral<P = T> + 'd,
-        irq: impl Peripheral<P = T::Interrupt> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         mck: impl Peripheral<P = impl GpioPin> + 'd,
         sck: impl Peripheral<P = impl GpioPin> + 'd,
         lrck: impl Peripheral<P = impl GpioPin> + 'd,
         master_clock: MasterClock,
         config: Config,
     ) -> Self {
-        into_ref!(i2s, irq, mck, sck, lrck);
+        into_ref!(i2s, mck, sck, lrck);
         Self {
             i2s,
-            irq,
             mck: Some(mck.map_into()),
             sck: sck.map_into(),
             lrck: lrck.map_into(),
@@ -402,17 +430,16 @@ impl<'d, T: Instance> I2S<'d, T> {
     }
 
     /// Create a new I2S in slave mode
-    pub fn slave(
+    pub fn new_slave(
         i2s: impl Peripheral<P = T> + 'd,
-        irq: impl Peripheral<P = T::Interrupt> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         sck: impl Peripheral<P = impl GpioPin> + 'd,
         lrck: impl Peripheral<P = impl GpioPin> + 'd,
         config: Config,
     ) -> Self {
-        into_ref!(i2s, irq, sck, lrck);
+        into_ref!(i2s, sck, lrck);
         Self {
             i2s,
-            irq,
             mck: None,
             sck: sck.map_into(),
             lrck: lrck.map_into(),
@@ -537,9 +564,8 @@ impl<'d, T: Instance> I2S<'d, T> {
     }
 
     fn setup_interrupt(&self) {
-        self.irq.set_handler(Self::on_interrupt);
-        self.irq.unpend();
-        self.irq.enable();
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
 
         let device = Device::<T>::new();
         device.disable_tx_ptr_interrupt();
@@ -553,29 +579,6 @@ impl<'d, T: Instance> I2S<'d, T> {
         device.enable_tx_ptr_interrupt();
         device.enable_rx_ptr_interrupt();
         device.enable_stopped_interrupt();
-    }
-
-    fn on_interrupt(_: *mut ()) {
-        let device = Device::<T>::new();
-        let s = T::state();
-
-        if device.is_tx_ptr_updated() {
-            trace!("TX INT");
-            s.tx_waker.wake();
-            device.disable_tx_ptr_interrupt();
-        }
-
-        if device.is_rx_ptr_updated() {
-            trace!("RX INT");
-            s.rx_waker.wake();
-            device.disable_rx_ptr_interrupt();
-        }
-
-        if device.is_stopped() {
-            trace!("STOPPED INT");
-            s.stop_waker.wake();
-            device.disable_stopped_interrupt();
-        }
     }
 
     async fn stop() {
@@ -1025,9 +1028,8 @@ impl<T: Instance> Device<T> {
     }
 
     fn validated_dma_parts<S>(buffer_ptr: *const [S]) -> Result<(u32, u32), Error> {
-        let (ptr, len) = slice_ptr_parts(buffer_ptr);
-        let ptr = ptr as u32;
-        let bytes_len = len * size_of::<S>();
+        let ptr = buffer_ptr as *const S as u32;
+        let bytes_len = buffer_ptr.len() * size_of::<S>();
         let maxcnt = (bytes_len / size_of::<u32>()) as u32;
 
         trace!("PTR={}, MAXCNT={}", ptr, maxcnt);
@@ -1138,55 +1140,50 @@ impl<S: Sample, const NB: usize, const NS: usize> MultiBuffering<S, NB, NS> {
     }
 }
 
-pub(crate) mod sealed {
-    use core::sync::atomic::AtomicBool;
+/// Peripheral static state
+pub(crate) struct State {
+    started: AtomicBool,
+    rx_waker: AtomicWaker,
+    tx_waker: AtomicWaker,
+    stop_waker: AtomicWaker,
+}
 
-    use embassy_sync::waitqueue::AtomicWaker;
-
-    /// Peripheral static state
-    pub struct State {
-        pub started: AtomicBool,
-        pub rx_waker: AtomicWaker,
-        pub tx_waker: AtomicWaker,
-        pub stop_waker: AtomicWaker,
-    }
-
-    impl State {
-        pub const fn new() -> Self {
-            Self {
-                started: AtomicBool::new(false),
-                rx_waker: AtomicWaker::new(),
-                tx_waker: AtomicWaker::new(),
-                stop_waker: AtomicWaker::new(),
-            }
+impl State {
+    pub(crate) const fn new() -> Self {
+        Self {
+            started: AtomicBool::new(false),
+            rx_waker: AtomicWaker::new(),
+            tx_waker: AtomicWaker::new(),
+            stop_waker: AtomicWaker::new(),
         }
-    }
-
-    pub trait Instance {
-        fn regs() -> &'static crate::pac::i2s::RegisterBlock;
-        fn state() -> &'static State;
     }
 }
 
-/// I2S peripehral instance.
-pub trait Instance: Peripheral<P = Self> + sealed::Instance + 'static + Send {
+pub(crate) trait SealedInstance {
+    fn regs() -> &'static crate::pac::i2s::RegisterBlock;
+    fn state() -> &'static State;
+}
+
+/// I2S peripheral instance.
+#[allow(private_bounds)]
+pub trait Instance: Peripheral<P = Self> + SealedInstance + 'static + Send {
     /// Interrupt for this peripheral.
-    type Interrupt: Interrupt;
+    type Interrupt: interrupt::typelevel::Interrupt;
 }
 
 macro_rules! impl_i2s {
     ($type:ident, $pac_type:ident, $irq:ident) => {
-        impl crate::i2s::sealed::Instance for peripherals::$type {
+        impl crate::i2s::SealedInstance for peripherals::$type {
             fn regs() -> &'static crate::pac::i2s::RegisterBlock {
                 unsafe { &*pac::$pac_type::ptr() }
             }
-            fn state() -> &'static crate::i2s::sealed::State {
-                static STATE: crate::i2s::sealed::State = crate::i2s::sealed::State::new();
+            fn state() -> &'static crate::i2s::State {
+                static STATE: crate::i2s::State = crate::i2s::State::new();
                 &STATE
             }
         }
         impl crate::i2s::Instance for peripherals::$type {
-            type Interrupt = crate::interrupt::$irq;
+            type Interrupt = crate::interrupt::typelevel::$irq;
         }
     };
 }

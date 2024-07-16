@@ -2,7 +2,7 @@
 
 use core::{ptr, slice};
 
-use embassy_hal_common::{into_ref, PeripheralRef};
+use embassy_hal_internal::{into_ref, PeripheralRef};
 use embedded_storage::nor_flash::{
     ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
 };
@@ -24,7 +24,7 @@ pub const FLASH_SIZE: usize = crate::chip::FLASH_SIZE;
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
-    /// Opration using a location not in flash.
+    /// Operation using a location not in flash.
     OutOfBounds,
     /// Unaligned operation or using unaligned buffers.
     Unaligned,
@@ -160,7 +160,7 @@ impl<'d> NorFlash for Nvmc<'d> {
         if offset as usize + bytes.len() > FLASH_SIZE {
             return Err(Error::OutOfBounds);
         }
-        if offset as usize % 4 != 0 || bytes.len() as usize % 4 != 0 {
+        if offset as usize % 4 != 0 || bytes.len() % 4 != 0 {
             return Err(Error::Unaligned);
         }
 

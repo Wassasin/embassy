@@ -1,5 +1,3 @@
-use core::iter::Iterator;
-
 use pio::{Program, SideSet, Wrap};
 
 pub struct CodeIterator<'a, I>
@@ -22,19 +20,15 @@ where
 {
     type Item = u16;
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().and_then(|&instr| {
-            Some(if instr & 0b1110_0000_0000_0000 == 0 {
+        self.iter.next().map(|&instr| {
+            if instr & 0b1110_0000_0000_0000 == 0 {
                 // this is a JMP instruction -> add offset to address
                 let address = (instr & 0b1_1111) as u8;
-                let address = address + self.offset;
-                assert!(
-                    address < pio::RP2040_MAX_PROGRAM_SIZE as u8,
-                    "Invalid JMP out of the program after offset addition"
-                );
+                let address = address.wrapping_add(self.offset) % 32;
                 instr & (!0b11111) | address as u16
             } else {
                 instr
-            })
+            }
         })
     }
 }
@@ -45,11 +39,6 @@ pub struct RelocatedProgram<'a, const PROGRAM_SIZE: usize> {
 }
 
 impl<'a, const PROGRAM_SIZE: usize> RelocatedProgram<'a, PROGRAM_SIZE> {
-    pub fn new(program: &Program<PROGRAM_SIZE>) -> RelocatedProgram<PROGRAM_SIZE> {
-        let origin = program.origin.unwrap_or(0);
-        RelocatedProgram { program, origin }
-    }
-
     pub fn new_with_origin(program: &Program<PROGRAM_SIZE>, origin: u8) -> RelocatedProgram<PROGRAM_SIZE> {
         RelocatedProgram { program, origin }
     }
@@ -62,8 +51,8 @@ impl<'a, const PROGRAM_SIZE: usize> RelocatedProgram<'a, PROGRAM_SIZE> {
         let wrap = self.program.wrap;
         let origin = self.origin;
         Wrap {
-            source: wrap.source + origin,
-            target: wrap.target + origin,
+            source: wrap.source.wrapping_add(origin) % 32,
+            target: wrap.target.wrapping_add(origin) % 32,
         }
     }
 

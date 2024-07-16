@@ -5,9 +5,14 @@ pub mod pac {
     // The nRF5340 has a secure and non-secure (NS) mode.
     // To avoid cfg spam, we remove _ns or _s suffixes here.
 
+    pub use nrf5340_net_pac::NVIC_PRIO_BITS;
+
+    #[cfg(feature="rt")]
+    #[doc(no_inline)]
+    pub use nrf5340_net_pac::interrupt;
+
     #[doc(no_inline)]
     pub use nrf5340_net_pac::{
-        interrupt,
         Interrupt,
         Peripherals,
 
@@ -107,7 +112,7 @@ pub const FORCE_COPY_BUFFER_SIZE: usize = 1024;
 
 pub const FLASH_SIZE: usize = 256 * 1024;
 
-embassy_hal_common::peripherals! {
+embassy_hal_internal::peripherals! {
     // RTC
     RTC0,
     RTC1,
@@ -126,6 +131,9 @@ embassy_hal_common::peripherals! {
 
     // SAADC
     SAADC,
+
+    // RNG
+    RNG,
 
     // PWM
     PWM0,
@@ -240,6 +248,12 @@ embassy_hal_common::peripherals! {
     P1_13,
     P1_14,
     P1_15,
+
+    // Radio
+    RADIO,
+
+    // EGU
+    EGU0,
 }
 
 impl_uarte!(SERIAL0, UARTE0, SERIAL0);
@@ -251,6 +265,8 @@ impl_twis!(SERIAL0, TWIS0, SERIAL0);
 impl_timer!(TIMER0, TIMER0, TIMER0);
 impl_timer!(TIMER1, TIMER1, TIMER1);
 impl_timer!(TIMER2, TIMER2, TIMER2);
+
+impl_rng!(RNG, RNG, RNG);
 
 impl_pin!(P0_00, 0, 0);
 impl_pin!(P0_01, 0, 1);
@@ -335,29 +351,29 @@ impl_ppi_channel!(PPI_CH29, 29 => configurable);
 impl_ppi_channel!(PPI_CH30, 30 => configurable);
 impl_ppi_channel!(PPI_CH31, 31 => configurable);
 
-pub mod irqs {
-    use embassy_cortex_m::interrupt::_export::declare;
+impl_radio!(RADIO, RADIO, RADIO);
 
-    use crate::pac::Interrupt as InterruptEnum;
+impl_egu!(EGU0, EGU0, EGU0);
 
-    declare!(CLOCK_POWER);
-    declare!(RADIO);
-    declare!(RNG);
-    declare!(GPIOTE);
-    declare!(WDT);
-    declare!(TIMER0);
-    declare!(ECB);
-    declare!(AAR_CCM);
-    declare!(TEMP);
-    declare!(RTC0);
-    declare!(IPC);
-    declare!(SERIAL0);
-    declare!(EGU0);
-    declare!(RTC1);
-    declare!(TIMER1);
-    declare!(TIMER2);
-    declare!(SWI0);
-    declare!(SWI1);
-    declare!(SWI2);
-    declare!(SWI3);
-}
+embassy_hal_internal::interrupt_mod!(
+    CLOCK_POWER,
+    RADIO,
+    RNG,
+    GPIOTE,
+    WDT,
+    TIMER0,
+    ECB,
+    AAR_CCM,
+    TEMP,
+    RTC0,
+    IPC,
+    SERIAL0,
+    EGU0,
+    RTC1,
+    TIMER1,
+    TIMER2,
+    SWI0,
+    SWI1,
+    SWI2,
+    SWI3,
+);

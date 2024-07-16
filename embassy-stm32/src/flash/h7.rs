@@ -1,13 +1,20 @@
-use core::convert::TryInto;
 use core::ptr::write_volatile;
+use core::sync::atomic::{fence, Ordering};
 
+use super::{FlashRegion, FlashSector, BANK1_REGION, FLASH_REGIONS, WRITE_SIZE};
 use crate::flash::Error;
 use crate::pac;
 
-const SECOND_BANK_OFFSET: usize = 0x0010_0000;
+pub(crate) const fn is_default_layout() -> bool {
+    true
+}
 
 const fn is_dual_bank() -> bool {
-    super::FLASH_SIZE / 2 > super::ERASE_SIZE
+    FLASH_REGIONS.len() >= 2
+}
+
+pub(crate) fn get_flash_regions() -> &'static [&'static FlashRegion] {
+    &FLASH_REGIONS
 }
 
 pub(crate) unsafe fn lock() {
@@ -18,104 +25,87 @@ pub(crate) unsafe fn lock() {
 }
 
 pub(crate) unsafe fn unlock() {
-    pac::FLASH.bank(0).keyr().write(|w| w.set_keyr(0x4567_0123));
-    pac::FLASH.bank(0).keyr().write(|w| w.set_keyr(0xCDEF_89AB));
-
+    if pac::FLASH.bank(0).cr().read().lock() {
+        pac::FLASH.bank(0).keyr().write_value(0x4567_0123);
+        pac::FLASH.bank(0).keyr().write_value(0xCDEF_89AB);
+    }
     if is_dual_bank() {
-        pac::FLASH.bank(1).keyr().write(|w| w.set_keyr(0x4567_0123));
-        pac::FLASH.bank(1).keyr().write(|w| w.set_keyr(0xCDEF_89AB));
+        if pac::FLASH.bank(1).cr().read().lock() {
+            pac::FLASH.bank(1).keyr().write_value(0x4567_0123);
+            pac::FLASH.bank(1).keyr().write_value(0xCDEF_89AB);
+        }
     }
 }
 
-pub(crate) unsafe fn blocking_write(offset: u32, buf: &[u8]) -> Result<(), Error> {
-    let bank = if !is_dual_bank() || (offset - super::FLASH_BASE as u32) < SECOND_BANK_OFFSET as u32 {
+pub(crate) unsafe fn enable_blocking_write() {
+    assert_eq!(0, WRITE_SIZE % 4);
+}
+
+pub(crate) unsafe fn disable_blocking_write() {}
+
+pub(crate) unsafe fn blocking_write(start_address: u32, buf: &[u8; WRITE_SIZE]) -> Result<(), Error> {
+    // We cannot have the write setup sequence in begin_write as it depends on the address
+    let bank = if start_address < BANK1_REGION.end() {
         pac::FLASH.bank(0)
     } else {
         pac::FLASH.bank(1)
     };
-
     bank.cr().write(|w| {
         w.set_pg(true);
+        #[cfg(flash_h7)]
         w.set_psize(2); // 32 bits at once
     });
-
     cortex_m::asm::isb();
     cortex_m::asm::dsb();
-    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    fence(Ordering::SeqCst);
 
-    let ret = {
-        let mut ret: Result<(), Error> = Ok(());
-        let mut offset = offset;
-        'outer: for chunk in buf.chunks(super::WRITE_SIZE) {
-            for val in chunk.chunks(4) {
-                trace!("Writing at {:x}", offset);
-                write_volatile(offset as *mut u32, u32::from_le_bytes(val[0..4].try_into().unwrap()));
-                offset += val.len() as u32;
+    let mut res = None;
+    let mut address = start_address;
+    for val in buf.chunks(4) {
+        write_volatile(address as *mut u32, u32::from_le_bytes(unwrap!(val.try_into())));
+        address += val.len() as u32;
 
-                ret = blocking_wait_ready(bank);
-                bank.sr().modify(|w| {
-                    if w.eop() {
-                        w.set_eop(true);
-                    }
-                });
-                if ret.is_err() {
-                    break 'outer;
-                }
+        res = Some(blocking_wait_ready(bank));
+        bank.sr().modify(|w| {
+            if w.eop() {
+                w.set_eop(true);
             }
-        }
-        ret
-    };
-
-    bank.cr().write(|w| w.set_pg(false));
-
-    cortex_m::asm::isb();
-    cortex_m::asm::dsb();
-    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-
-    ret
-}
-
-pub(crate) unsafe fn blocking_erase(from: u32, to: u32) -> Result<(), Error> {
-    let from = from - super::FLASH_BASE as u32;
-    let to = to - super::FLASH_BASE as u32;
-
-    let (start, end) = if to <= super::FLASH_SIZE as u32 {
-        let start_sector = from / super::ERASE_SIZE as u32;
-        let end_sector = to / super::ERASE_SIZE as u32;
-        (start_sector, end_sector)
-    } else {
-        error!("Attempting to write outside of defined sectors {:x} {:x}", from, to);
-        return Err(Error::Unaligned);
-    };
-
-    trace!("Erasing sectors from {} to {}", start, end);
-    for sector in start..end {
-        let bank = if sector >= 8 { 1 } else { 0 };
-        let ret = erase_sector(pac::FLASH.bank(bank), (sector % 8) as u8);
-        if ret.is_err() {
-            return ret;
+        });
+        if unwrap!(res).is_err() {
+            break;
         }
     }
 
-    Ok(())
+    cortex_m::asm::isb();
+    cortex_m::asm::dsb();
+    fence(Ordering::SeqCst);
+
+    bank.cr().write(|w| w.set_pg(false));
+
+    unwrap!(res)
 }
 
-unsafe fn erase_sector(bank: pac::flash::Bank, sector: u8) -> Result<(), Error> {
+pub(crate) unsafe fn blocking_erase_sector(sector: &FlashSector) -> Result<(), Error> {
+    let bank = pac::FLASH.bank(sector.bank as usize);
     bank.cr().modify(|w| {
         w.set_ser(true);
-        w.set_snb(sector)
+        #[cfg(flash_h7)]
+        w.set_snb(sector.index_in_bank);
+        #[cfg(flash_h7ab)]
+        w.set_ssn(sector.index_in_bank);
     });
 
     bank.cr().modify(|w| {
         w.set_start(true);
     });
 
+    cortex_m::asm::isb();
+    cortex_m::asm::dsb();
+    fence(Ordering::SeqCst);
+
     let ret: Result<(), Error> = blocking_wait_ready(bank);
-
     bank.cr().modify(|w| w.set_ser(false));
-
     bank_clear_all_err(bank);
-
     ret
 }
 
@@ -125,42 +115,12 @@ pub(crate) unsafe fn clear_all_err() {
 }
 
 unsafe fn bank_clear_all_err(bank: pac::flash::Bank) {
-    bank.sr().modify(|w| {
-        if w.wrperr() {
-            w.set_wrperr(true);
-        }
-        if w.pgserr() {
-            w.set_pgserr(true);
-        }
-        if w.strberr() {
-            // single address was written multiple times, can be ignored
-            w.set_strberr(true);
-        }
-        if w.incerr() {
-            // writing to a different address when programming 256 bit word was not finished
-            w.set_incerr(true);
-        }
-        if w.operr() {
-            w.set_operr(true);
-        }
-        if w.sneccerr1() {
-            // single ECC error
-            w.set_sneccerr1(true);
-        }
-        if w.dbeccerr() {
-            // double ECC error
-            w.set_dbeccerr(true);
-        }
-        if w.rdperr() {
-            w.set_rdperr(true);
-        }
-        if w.rdserr() {
-            w.set_rdserr(true);
-        }
-    });
+    // read and write back the same value.
+    // This clears all "write 1 to clear" bits.
+    bank.sr().modify(|_| {});
 }
 
-pub(crate) unsafe fn blocking_wait_ready(bank: pac::flash::Bank) -> Result<(), Error> {
+unsafe fn blocking_wait_ready(bank: pac::flash::Bank) -> Result<(), Error> {
     loop {
         let sr = bank.sr().read();
 
@@ -175,6 +135,10 @@ pub(crate) unsafe fn blocking_wait_ready(bank: pac::flash::Bank) -> Result<(), E
             if sr.incerr() {
                 // writing to a different address when programming 256 bit word was not finished
                 error!("incerr");
+                return Err(Error::Seq);
+            }
+            if sr.crcrderr() {
+                error!("crcrderr");
                 return Err(Error::Seq);
             }
             if sr.operr() {

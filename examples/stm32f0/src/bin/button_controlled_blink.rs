@@ -2,29 +2,28 @@
 
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_stm32::exti::ExtiInput;
-use embassy_stm32::gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed};
-use embassy_time::{Duration, Timer};
+use embassy_stm32::gpio::{AnyPin, Level, Output, Pin, Pull, Speed};
+use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 
 static BLINK_MS: AtomicU32 = AtomicU32::new(0);
 
 #[embassy_executor::task]
 async fn led_task(led: AnyPin) {
-    // Configure the LED pin as a push pull ouput and obtain handler.
-    // On the Nucleo F091RC theres an on-board LED connected to pin PA5.
+    // Configure the LED pin as a push pull output and obtain handler.
+    // On the Nucleo F091RC there's an on-board LED connected to pin PA5.
     let mut led = Output::new(led, Level::Low, Speed::Low);
 
     loop {
         let del = BLINK_MS.load(Ordering::Relaxed);
         info!("Value of del is {}", del);
-        Timer::after(Duration::from_millis(del.into())).await;
+        Timer::after_millis(del.into()).await;
         info!("LED toggling");
         led.toggle();
     }
@@ -37,8 +36,7 @@ async fn main(spawner: Spawner) {
 
     // Configure the button pin and obtain handler.
     // On the Nucleo F091RC there is a button connected to pin PC13.
-    let button = Input::new(p.PC13, Pull::None);
-    let mut button = ExtiInput::new(button, p.EXTI13);
+    let mut button = ExtiInput::new(p.PC13, p.EXTI13, Pull::None);
 
     // Create and initialize a delay variable to manage delay loop
     let mut del_var = 2000;

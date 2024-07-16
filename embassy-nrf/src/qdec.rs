@@ -1,20 +1,21 @@
 //! Quadrature decoder (QDEC) driver.
 
+#![macro_use]
+
 use core::future::poll_fn;
+use core::marker::PhantomData;
 use core::task::Poll;
 
-use embassy_hal_common::{into_ref, PeripheralRef};
+use embassy_hal_internal::{into_ref, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 
-use crate::gpio::sealed::Pin as _;
-use crate::gpio::{AnyPin, Pin as GpioPin};
-use crate::interrupt::InterruptExt;
-use crate::peripherals::QDEC;
-use crate::{interrupt, pac, Peripheral};
+use crate::gpio::{AnyPin, Pin as GpioPin, SealedPin as _};
+use crate::interrupt::typelevel::Interrupt;
+use crate::{interrupt, Peripheral};
 
 /// Quadrature decoder driver.
-pub struct Qdec<'d> {
-    _p: PeripheralRef<'d, QDEC>,
+pub struct Qdec<'d, T: Instance> {
+    _p: PeripheralRef<'d, T>,
 }
 
 /// QDEC config
@@ -44,44 +45,52 @@ impl Default for Config {
     }
 }
 
-static WAKER: AtomicWaker = AtomicWaker::new();
+/// Interrupt handler.
+pub struct InterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
 
-impl<'d> Qdec<'d> {
+impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        T::regs().intenclr.write(|w| w.reportrdy().clear());
+        T::state().waker.wake();
+    }
+}
+
+impl<'d, T: Instance> Qdec<'d, T> {
     /// Create a new QDEC.
     pub fn new(
-        qdec: impl Peripheral<P = QDEC> + 'd,
-        irq: impl Peripheral<P = interrupt::QDEC> + 'd,
+        qdec: impl Peripheral<P = T> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         a: impl Peripheral<P = impl GpioPin> + 'd,
         b: impl Peripheral<P = impl GpioPin> + 'd,
         config: Config,
     ) -> Self {
-        into_ref!(a, b);
-        Self::new_inner(qdec, irq, a.map_into(), b.map_into(), None, config)
+        into_ref!(qdec, a, b);
+        Self::new_inner(qdec, a.map_into(), b.map_into(), None, config)
     }
 
     /// Create a new QDEC, with a pin for LED output.
     pub fn new_with_led(
-        qdec: impl Peripheral<P = QDEC> + 'd,
-        irq: impl Peripheral<P = interrupt::QDEC> + 'd,
+        qdec: impl Peripheral<P = T> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         a: impl Peripheral<P = impl GpioPin> + 'd,
         b: impl Peripheral<P = impl GpioPin> + 'd,
         led: impl Peripheral<P = impl GpioPin> + 'd,
         config: Config,
     ) -> Self {
-        into_ref!(a, b, led);
-        Self::new_inner(qdec, irq, a.map_into(), b.map_into(), Some(led.map_into()), config)
+        into_ref!(qdec, a, b, led);
+        Self::new_inner(qdec, a.map_into(), b.map_into(), Some(led.map_into()), config)
     }
 
     fn new_inner(
-        p: impl Peripheral<P = QDEC> + 'd,
-        irq: impl Peripheral<P = interrupt::QDEC> + 'd,
+        p: PeripheralRef<'d, T>,
         a: PeripheralRef<'d, AnyPin>,
         b: PeripheralRef<'d, AnyPin>,
         led: Option<PeripheralRef<'d, AnyPin>>,
         config: Config,
     ) -> Self {
-        into_ref!(p, irq);
-        let r = Self::regs();
+        let r = T::regs();
 
         // Select pins.
         a.conf().write(|w| w.input().connect().pull().pullup());
@@ -124,19 +133,14 @@ impl<'d> Qdec<'d> {
             SamplePeriod::_131ms => w.sampleper()._131ms(),
         });
 
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
+
         // Enable peripheral
         r.enable.write(|w| w.enable().set_bit());
 
         // Start sampling
         unsafe { r.tasks_start.write(|w| w.bits(1)) };
-
-        irq.disable();
-        irq.set_handler(|_| {
-            let r = Self::regs();
-            r.intenclr.write(|w| w.reportrdy().clear());
-            WAKER.wake();
-        });
-        irq.enable();
 
         Self { _p: p }
     }
@@ -149,32 +153,36 @@ impl<'d> Qdec<'d> {
     /// # Example
     ///
     /// ```no_run
-    /// let irq = interrupt::take!(QDEC);
+    /// use embassy_nrf::qdec::{self, Qdec};
+    /// use embassy_nrf::{bind_interrupts, peripherals};
+    ///
+    /// bind_interrupts!(struct Irqs {
+    ///     QDEC => qdec::InterruptHandler<peripherals::QDEC>;
+    /// });
+    ///
+    /// # async {
+    /// # let p: embassy_nrf::Peripherals = todo!();
     /// let config = qdec::Config::default();
-    /// let mut q = Qdec::new(p.QDEC, p.P0_31, p.P0_30, config);
+    /// let mut q = Qdec::new(p.QDEC, Irqs, p.P0_31, p.P0_30, config);
     /// let delta = q.read().await;
+    /// # };
     /// ```
     pub async fn read(&mut self) -> i16 {
-        let t = Self::regs();
+        let t = T::regs();
         t.intenset.write(|w| w.reportrdy().set());
         unsafe { t.tasks_readclracc.write(|w| w.bits(1)) };
 
-        let value = poll_fn(|cx| {
-            WAKER.register(cx.waker());
+        poll_fn(|cx| {
+            T::state().waker.register(cx.waker());
             if t.events_reportrdy.read().bits() == 0 {
-                return Poll::Pending;
+                Poll::Pending
             } else {
                 t.events_reportrdy.reset();
                 let acc = t.accread.read().bits();
                 Poll::Ready(acc as i16)
             }
         })
-        .await;
-        value
-    }
-
-    fn regs() -> &'static pac::qdec::RegisterBlock {
-        unsafe { &*pac::QDEC::ptr() }
+        .await
     }
 }
 
@@ -235,4 +243,46 @@ pub enum LedPolarity {
     ActiveHigh,
     /// Active low (a low output turns on the LED).
     ActiveLow,
+}
+
+/// Peripheral static state
+pub(crate) struct State {
+    waker: AtomicWaker,
+}
+
+impl State {
+    pub(crate) const fn new() -> Self {
+        Self {
+            waker: AtomicWaker::new(),
+        }
+    }
+}
+
+pub(crate) trait SealedInstance {
+    fn regs() -> &'static crate::pac::qdec::RegisterBlock;
+    fn state() -> &'static State;
+}
+
+/// qdec peripheral instance.
+#[allow(private_bounds)]
+pub trait Instance: Peripheral<P = Self> + SealedInstance + 'static + Send {
+    /// Interrupt for this peripheral.
+    type Interrupt: interrupt::typelevel::Interrupt;
+}
+
+macro_rules! impl_qdec {
+    ($type:ident, $pac_type:ident, $irq:ident) => {
+        impl crate::qdec::SealedInstance for peripherals::$type {
+            fn regs() -> &'static crate::pac::qdec::RegisterBlock {
+                unsafe { &*pac::$pac_type::ptr() }
+            }
+            fn state() -> &'static crate::qdec::State {
+                static STATE: crate::qdec::State = crate::qdec::State::new();
+                &STATE
+            }
+        }
+        impl crate::qdec::Instance for peripherals::$type {
+            type Interrupt = crate::interrupt::typelevel::$irq;
+        }
+    };
 }

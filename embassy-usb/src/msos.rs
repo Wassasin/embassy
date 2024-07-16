@@ -1,12 +1,10 @@
-#![cfg(feature = "msos-descriptor")]
-
 //! Microsoft OS Descriptors
 //!
 //! <https://docs.microsoft.com/en-us/windows-hardware/drivers/usbcon/microsoft-os-2-0-descriptors-specification>
 
 use core::mem::size_of;
 
-use super::{capability_type, BosWriter};
+use crate::descriptor::{capability_type, BosWriter};
 use crate::types::InterfaceNumber;
 
 /// A serialized Microsoft OS 2.0 Descriptor set.
@@ -31,6 +29,11 @@ impl<'d> MsOsDescriptorSet<'d> {
     /// Returns `true` if no MS OS descriptor data is available
     pub fn is_empty(&self) -> bool {
         self.descriptor.is_empty()
+    }
+
+    /// Returns the length of the descriptor field
+    pub fn len(&self) -> usize {
+        self.descriptor.len()
     }
 }
 
@@ -181,7 +184,7 @@ impl<'d> MsOsDescriptorWriter<'d> {
             capability_type::PLATFORM,
             &[
                 0, // reserved
-                // platform capability UUID, Microsoft OS 2.0 platform compabitility
+                // platform capability UUID, Microsoft OS 2.0 platform compatibility
                 0xdf,
                 0x60,
                 0xdd,
@@ -223,27 +226,21 @@ pub mod windows_version {
     pub const WIN10: u32 = 0x0A000000;
 }
 
-mod sealed {
-    use core::mem::size_of;
+/// A trait for descriptors
+trait Descriptor: Sized {
+    const TYPE: DescriptorType;
 
-    /// A trait for descriptors
-    pub trait Descriptor: Sized {
-        const TYPE: super::DescriptorType;
-
-        /// The size of the descriptor's header.
-        fn size(&self) -> usize {
-            size_of::<Self>()
-        }
-
-        fn write_to(&self, buf: &mut [u8]);
+    /// The size of the descriptor's header.
+    fn size(&self) -> usize {
+        size_of::<Self>()
     }
 
-    pub trait DescriptorSet: Descriptor {
-        const LENGTH_OFFSET: usize;
-    }
+    fn write_to(&self, buf: &mut [u8]);
 }
 
-use sealed::*;
+trait DescriptorSet: Descriptor {
+    const LENGTH_OFFSET: usize;
+}
 
 /// Copies the data of `t` into `buf`.
 ///
@@ -252,7 +249,7 @@ use sealed::*;
 unsafe fn transmute_write_to<T: Sized>(t: &T, buf: &mut [u8]) {
     let bytes = core::slice::from_raw_parts((t as *const T) as *const u8, size_of::<T>());
     assert!(buf.len() >= bytes.len(), "MS OS descriptor buffer full");
-    (&mut buf[..bytes.len()]).copy_from_slice(bytes);
+    buf[..bytes.len()].copy_from_slice(bytes);
 }
 
 /// Table 9. Microsoft OS 2.0 descriptor wDescriptorType values.
@@ -409,9 +406,11 @@ impl DescriptorSet for FunctionSubsetHeader {
 // Feature Descriptors
 
 /// A marker trait for feature descriptors that are valid at the device level.
+#[allow(private_bounds)]
 pub trait DeviceLevelDescriptor: Descriptor {}
 
 /// A marker trait for feature descriptors that are valid at the function level.
+#[allow(private_bounds)]
 pub trait FunctionLevelDescriptor: Descriptor {}
 
 /// Table 13. Microsoft OS 2.0 compatible ID descriptor.
@@ -441,9 +440,9 @@ impl CompatibleIdFeatureDescriptor {
     pub fn new(compatible_id: &str, sub_compatible_id: &str) -> Self {
         assert!(compatible_id.len() <= 8 && sub_compatible_id.len() <= 8);
         let mut cid = [0u8; 8];
-        (&mut cid[..compatible_id.len()]).copy_from_slice(compatible_id.as_bytes());
+        cid[..compatible_id.len()].copy_from_slice(compatible_id.as_bytes());
         let mut scid = [0u8; 8];
-        (&mut scid[..sub_compatible_id.len()]).copy_from_slice(sub_compatible_id.as_bytes());
+        scid[..sub_compatible_id.len()].copy_from_slice(sub_compatible_id.as_bytes());
         Self::new_raw(cid, scid)
     }
 
@@ -521,7 +520,7 @@ impl<'a> PropertyData<'a> {
             PropertyData::Binary(val) => val.len(),
             PropertyData::DwordLittleEndian(val) | PropertyData::DwordBigEndian(val) => core::mem::size_of_val(val),
             PropertyData::RegMultiSz(val) => {
-                core::mem::size_of::<u16>() * val.iter().map(|x| x.encode_utf16().count() + 1).sum::<usize>() + 1
+                core::mem::size_of::<u16>() * (val.iter().map(|x| x.encode_utf16().count() + 1).sum::<usize>() + 1)
             }
         }
     }

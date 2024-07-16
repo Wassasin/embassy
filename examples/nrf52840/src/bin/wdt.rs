@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use defmt::*;
 use embassy_executor::Spawner;
@@ -16,7 +15,7 @@ async fn main(_spawner: Spawner) {
     let mut config = Config::default();
     config.timeout_ticks = 32768 * 3; // 3 seconds
 
-    // This is needed for `probe-run` to be able to catch the panic message
+    // This is needed for `probe-rs run` to be able to catch the panic message
     // in the WDT interrupt. The core resets 2 ticks after firing the interrupt.
     config.run_during_debug_halt = false;
 

@@ -1,29 +1,14 @@
-#![feature(type_alias_impl_trait)]
-
-use std::default::Default;
-
 use clap::Parser;
 use embassy_executor::{Executor, Spawner};
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Config, Ipv4Address, Ipv4Cidr, Stack, StackResources};
-use embedded_io::asynch::Write;
+use embassy_net_tuntap::TunTapDevice;
+use embassy_time::Duration;
+use embedded_io_async::Write;
 use heapless::Vec;
 use log::*;
 use rand_core::{OsRng, RngCore};
 use static_cell::StaticCell;
-
-#[path = "../tuntap.rs"]
-mod tuntap;
-
-use crate::tuntap::TunTapDevice;
-
-macro_rules! singleton {
-    ($val:expr) => {{
-        type T = impl Sized;
-        static STATIC_CELL: StaticCell<T> = StaticCell::new();
-        STATIC_CELL.init_with(move || $val)
-    }};
-}
 
 #[derive(Parser)]
 #[clap(version = "1.0")]
@@ -50,13 +35,13 @@ async fn main_task(spawner: Spawner) {
 
     // Choose between dhcp or static ip
     let config = if opts.static_ip {
-        Config::Static(embassy_net::StaticConfig {
+        Config::ipv4_static(embassy_net::StaticConfigV4 {
             address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
             dns_servers: Vec::new(),
             gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
         })
     } else {
-        Config::Dhcp(Default::default())
+        Config::dhcpv4(Default::default())
     };
 
     // Generate random seed
@@ -65,7 +50,14 @@ async fn main_task(spawner: Spawner) {
     let seed = u64::from_le_bytes(seed);
 
     // Init network stack
-    let stack = &*singleton!(Stack::new(device, config, singleton!(StackResources::<3>::new()), seed));
+    static STACK: StaticCell<Stack<TunTapDevice>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+    let stack = &*STACK.init(Stack::new(
+        device,
+        config,
+        RESOURCES.init(StackResources::<3>::new()),
+        seed,
+    ));
 
     // Launch network task
     spawner.spawn(net_task(stack)).unwrap();
@@ -75,7 +67,7 @@ async fn main_task(spawner: Spawner) {
     let mut tx_buffer = [0; 4096];
     let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
 
-    socket.set_timeout(Some(embassy_net::SmolDuration::from_secs(10)));
+    socket.set_timeout(Some(Duration::from_secs(10)));
 
     let remote_endpoint = (Ipv4Address::new(192, 168, 69, 100), 8000);
     info!("connecting to {:?}...", remote_endpoint);

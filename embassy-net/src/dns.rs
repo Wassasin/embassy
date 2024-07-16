@@ -1,4 +1,9 @@
-//! DNS socket with async support.
+//! DNS client compatible with the `embedded-nal-async` traits.
+//!
+//! This exists only for compatibility with crates that use `embedded-nal-async`.
+//! Prefer using [`Stack::dns_query`](crate::Stack::dns_query) directly if you're
+//! not using `embedded-nal-async`.
+
 use heapless::Vec;
 pub use smoltcp::socket::dns::{DnsQuery, Socket};
 pub(crate) use smoltcp::socket::dns::{GetQueryResultError, StartQueryError};
@@ -34,7 +39,11 @@ impl From<StartQueryError> for Error {
     }
 }
 
-/// Async socket for making DNS queries.
+/// DNS client compatible with the `embedded-nal-async` traits.
+///
+/// This exists only for compatibility with crates that use `embedded-nal-async`.
+/// Prefer using [`Stack::dns_query`](crate::Stack::dns_query) directly if you're
+/// not using `embedded-nal-async`.
 pub struct DnsSocket<'a, D>
 where
     D: Driver + 'static,
@@ -54,12 +63,15 @@ where
     }
 
     /// Make a query for a given name and return the corresponding IP addresses.
-    pub async fn query(&self, name: &str, qtype: DnsQueryType) -> Result<Vec<IpAddress, 1>, Error> {
+    pub async fn query(
+        &self,
+        name: &str,
+        qtype: DnsQueryType,
+    ) -> Result<Vec<IpAddress, { smoltcp::config::DNS_MAX_RESULT_COUNT }>, Error> {
         self.stack.dns_query(name, qtype).await
     }
 }
 
-#[cfg(all(feature = "unstable-traits", feature = "nightly"))]
 impl<'a, D> embedded_nal_async::Dns for DnsSocket<'a, D>
 where
     D: Driver + 'static,
@@ -72,13 +84,29 @@ where
         addr_type: embedded_nal_async::AddrType,
     ) -> Result<embedded_nal_async::IpAddr, Self::Error> {
         use embedded_nal_async::{AddrType, IpAddr};
-        let qtype = match addr_type {
-            AddrType::IPv6 => DnsQueryType::Aaaa,
-            _ => DnsQueryType::A,
+        let (qtype, secondary_qtype) = match addr_type {
+            AddrType::IPv4 => (DnsQueryType::A, None),
+            AddrType::IPv6 => (DnsQueryType::Aaaa, None),
+            AddrType::Either => {
+                #[cfg(not(feature = "proto-ipv6"))]
+                let v6_first = false;
+                #[cfg(feature = "proto-ipv6")]
+                let v6_first = self.stack.config_v6().is_some();
+                match v6_first {
+                    true => (DnsQueryType::Aaaa, Some(DnsQueryType::A)),
+                    false => (DnsQueryType::A, Some(DnsQueryType::Aaaa)),
+                }
+            }
         };
-        let addrs = self.query(host, qtype).await?;
+        let mut addrs = self.query(host, qtype).await?;
+        if addrs.is_empty() {
+            if let Some(qtype) = secondary_qtype {
+                addrs = self.query(host, qtype).await?
+            }
+        }
         if let Some(first) = addrs.get(0) {
             Ok(match first {
+                #[cfg(feature = "proto-ipv4")]
                 IpAddress::Ipv4(addr) => IpAddr::V4(addr.0.into()),
                 #[cfg(feature = "proto-ipv6")]
                 IpAddress::Ipv6(addr) => IpAddr::V6(addr.0.into()),
@@ -91,7 +119,8 @@ where
     async fn get_host_by_address(
         &self,
         _addr: embedded_nal_async::IpAddr,
-    ) -> Result<heapless::String<256>, Self::Error> {
+        _result: &mut [u8],
+    ) -> Result<usize, Self::Error> {
         todo!()
     }
 }

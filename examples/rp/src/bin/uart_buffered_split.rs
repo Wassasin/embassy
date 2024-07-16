@@ -1,35 +1,36 @@
+//! This example shows how to use UART (Universal asynchronous receiver-transmitter) in the RP2040 chip.
+//!
+//! No specific hardware is specified in this example. If you connect pin 0 and 1 you should get the same data back.
+//! The Raspberry Pi Debug Probe (https://www.raspberrypi.com/products/debug-probe/) could be used
+//! with its UART port.
+
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_executor::_export::StaticCell;
-use embassy_rp::interrupt;
+use embassy_rp::bind_interrupts;
 use embassy_rp::peripherals::UART0;
-use embassy_rp::uart::{BufferedUart, BufferedUartRx, Config};
-use embassy_time::{Duration, Timer};
-use embedded_io::asynch::{Read, Write};
+use embassy_rp::uart::{BufferedInterruptHandler, BufferedUart, BufferedUartRx, Config};
+use embassy_time::Timer;
+use embedded_io_async::{Read, Write};
+use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
-macro_rules! singleton {
-    ($val:expr) => {{
-        type T = impl Sized;
-        static STATIC_CELL: StaticCell<T> = StaticCell::new();
-        let (x,) = STATIC_CELL.init(($val,));
-        x
-    }};
-}
+bind_interrupts!(struct Irqs {
+    UART0_IRQ => BufferedInterruptHandler<UART0>;
+});
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     let (tx_pin, rx_pin, uart) = (p.PIN_0, p.PIN_1, p.UART0);
 
-    let irq = interrupt::take!(UART0_IRQ);
-    let tx_buf = &mut singleton!([0u8; 16])[..];
-    let rx_buf = &mut singleton!([0u8; 16])[..];
-    let uart = BufferedUart::new(uart, irq, tx_pin, rx_pin, tx_buf, rx_buf, Config::default());
+    static TX_BUF: StaticCell<[u8; 16]> = StaticCell::new();
+    let tx_buf = &mut TX_BUF.init([0; 16])[..];
+    static RX_BUF: StaticCell<[u8; 16]> = StaticCell::new();
+    let rx_buf = &mut RX_BUF.init([0; 16])[..];
+    let uart = BufferedUart::new(uart, Irqs, tx_pin, rx_pin, tx_buf, rx_buf, Config::default());
     let (rx, mut tx) = uart.split();
 
     unwrap!(spawner.spawn(reader(rx)));
@@ -42,7 +43,7 @@ async fn main(spawner: Spawner) {
         ];
         info!("TX {:?}", data);
         tx.write_all(&data).await.unwrap();
-        Timer::after(Duration::from_secs(1)).await;
+        Timer::after_secs(1).await;
     }
 }
 

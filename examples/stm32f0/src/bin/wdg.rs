@@ -1,11 +1,10 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::wdg::IndependentWatchdog;
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 
 #[embassy_executor::main]
@@ -16,10 +15,10 @@ async fn main(_spawner: Spawner) {
     let mut wdg = IndependentWatchdog::new(p.IWDG, 20_000_00);
 
     info!("Watchdog start");
-    unsafe { wdg.unleash() };
+    wdg.unleash();
 
     loop {
-        Timer::after(Duration::from_secs(1)).await;
-        unsafe { wdg.pet() };
+        Timer::after_secs(1).await;
+        wdg.pet();
     }
 }

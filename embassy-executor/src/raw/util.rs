@@ -17,11 +17,41 @@ impl<T> UninitCell<T> {
         &mut *self.as_mut_ptr()
     }
 
-    pub unsafe fn write(&self, val: T) {
-        ptr::write(self.as_mut_ptr(), val)
+    #[inline(never)]
+    pub unsafe fn write_in_place(&self, func: impl FnOnce() -> T) {
+        ptr::write(self.as_mut_ptr(), func())
     }
 
     pub unsafe fn drop_in_place(&self) {
         ptr::drop_in_place(self.as_mut_ptr())
+    }
+}
+
+unsafe impl<T> Sync for UninitCell<T> {}
+
+#[repr(transparent)]
+pub struct SyncUnsafeCell<T> {
+    value: UnsafeCell<T>,
+}
+
+unsafe impl<T: Sync> Sync for SyncUnsafeCell<T> {}
+
+impl<T> SyncUnsafeCell<T> {
+    #[inline]
+    pub const fn new(value: T) -> Self {
+        Self {
+            value: UnsafeCell::new(value),
+        }
+    }
+
+    pub unsafe fn set(&self, value: T) {
+        *self.value.get() = value;
+    }
+
+    pub unsafe fn get(&self) -> T
+    where
+        T: Copy,
+    {
+        *self.value.get()
     }
 }
