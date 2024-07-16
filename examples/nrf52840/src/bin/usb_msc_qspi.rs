@@ -9,16 +9,14 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_nrf::usb::Driver;
 use embassy_nrf::{
-    bind_interrupts,
-    pac, peripherals, qspi,
+    bind_interrupts, pac, peripherals, qspi,
     usb::{self, vbus_detect::HardwareVbusDetect},
 };
 use embassy_usb::class::msc::subclass::scsi::block_device::{BlockDevice, BlockDeviceError};
 use embassy_usb::class::msc::subclass::scsi::Scsi;
 use embassy_usb::class::msc::transport::bulk_only::BulkOnlyTransport;
 use embassy_usb::Builder;
-use embedded_storage::nor_flash::NorFlash;
-use static_cell::StaticCell;
+use embedded_storage_async::nor_flash::NorFlash;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
@@ -29,11 +27,6 @@ bind_interrupts!(struct Irqs {
 
 const BLOCK_SIZE: usize = 4096;
 const BLOCK_COUNT: usize = 2 * 1024;
-
-// Workaround for alignment requirements.
-// Nicer API will probably come in the future.
-#[repr(C, align(4))]
-struct AlignedBuf([u8; BLOCK_SIZE]);
 
 struct FlashBlockDevice<FLASH: NorFlash> {
     flash: RefCell<FLASH>,
@@ -59,8 +52,8 @@ impl<FLASH: NorFlash> BlockDevice for FlashBlockDevice<FLASH> {
         self.flash
             .borrow_mut()
             .read(self.range.start as u32 + (lba * BLOCK_SIZE as u32), block)
+            .await
             .map_err(|_| BlockDeviceError::ReadError)?;
-
 
         Ok(())
     }
@@ -72,9 +65,13 @@ impl<FLASH: NorFlash> BlockDevice for FlashBlockDevice<FLASH> {
         let start = self.range.start as u32 + (lba * BLOCK_SIZE as u32);
         flash
             .erase(start, start + BLOCK_SIZE as u32)
+            .await
             .map_err(|_| BlockDeviceError::WriteError)?;
 
-        flash.write(start, block).map_err(|_| BlockDeviceError::WriteError)?;
+        flash
+            .write(start, block)
+            .await
+            .map_err(|_| BlockDeviceError::WriteError)?;
         Ok(())
     }
 }
@@ -97,7 +94,15 @@ async fn main(_spawner: Spawner) {
     qspi_config.write_page_size = qspi::WritePageSize::_256BYTES;
 
     let mut q = qspi::Qspi::new(
-        p.QSPI, Irqs, p.P0_19, p.P0_17, p.P0_20, p.P0_21, p.P0_22, p.P0_23, qspi_config,
+        p.QSPI,
+        Irqs,
+        p.P0_19,
+        p.P0_17,
+        p.P0_20,
+        p.P0_21,
+        p.P0_22,
+        p.P0_23,
+        qspi_config,
     );
 
     let mut id = [1; 3];
