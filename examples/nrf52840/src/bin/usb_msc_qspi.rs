@@ -47,8 +47,6 @@ impl<FLASH: NorFlash> BlockDevice for FlashBlockDevice<FLASH> {
     }
 
     async fn read_block(&self, lba: u32, block: &mut [u8]) -> Result<(), BlockDeviceError> {
-        defmt::info!("Read {}", lba);
-
         self.flash
             .borrow_mut()
             .read(self.range.start as u32 + (lba * BLOCK_SIZE as u32), block)
@@ -59,8 +57,6 @@ impl<FLASH: NorFlash> BlockDevice for FlashBlockDevice<FLASH> {
     }
 
     async fn write_block(&mut self, lba: u32, block: &[u8]) -> Result<(), BlockDeviceError> {
-        defmt::info!("Written {}", lba);
-
         let mut flash = self.flash.borrow_mut();
         let start = self.range.start as u32 + (lba * BLOCK_SIZE as u32);
         flash
@@ -72,6 +68,10 @@ impl<FLASH: NorFlash> BlockDevice for FlashBlockDevice<FLASH> {
             .write(start, block)
             .await
             .map_err(|_| BlockDeviceError::WriteError)?;
+        Ok(())
+    }
+
+    async fn flush(&self) -> Result<(), BlockDeviceError> {
         Ok(())
     }
 }

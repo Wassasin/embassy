@@ -5,6 +5,8 @@ pub mod enums;
 
 use core::mem::MaybeUninit;
 
+use commands::StartStopUnitCommand;
+
 use self::block_device::{BlockDevice, BlockDeviceError};
 use self::enums::AdditionalSenseCode;
 use crate::class::msc::subclass::scsi::commands::{
@@ -112,6 +114,20 @@ impl<'d, B: BlockDevice> Scsi<'d, B> {
                 for lba in start_lba..start_lba + transfer_length {
                     pipe.read(&mut self.buffer[..block_size]).await?;
                     self.device.write_block(lba, &self.buffer[..block_size]).await?;
+                }
+
+                Ok(())
+            }
+            StartStopUnitCommand::OPCODE => {
+                let req = StartStopUnitCommand::from_bytes(cmd).ok_or(InternalError::CommandParseError)?;
+                info!("{:?}", req);
+
+                if !req.no_flush() {
+                    self.device.flush().await?;
+                }
+
+                if !req.start() && req.loej() {
+                    // TODO eject storage medium (i.e. stop the SD card) and terminate the SCSI device until the bus reconnects.
                 }
 
                 Ok(())
@@ -329,7 +345,10 @@ impl<'d, B: BlockDevice> CommandSetHandler for Scsi<'d, B> {
                 Ok(())
             }
             Err(e) => {
-                error!("command_out error op={}, err={:?}", cmd.get(0), e);
+                if !matches!(e, InternalError::CustomSenseData(_)) {
+                    error!("command_out error op={}, err={:?}", cmd.get(0), e);
+                }
+
                 self.sense = Some(e.into_sense_data());
                 Err(match e {
                     InternalError::DataPipeError(e) => e.into(),

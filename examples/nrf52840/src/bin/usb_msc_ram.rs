@@ -3,13 +3,16 @@
 
 use defmt::*;
 use embassy_executor::Spawner;
+use embassy_futures::join::join;
 use embassy_nrf::usb::Driver;
-use embassy_nrf::{bind_interrupts, pac, peripherals, usb::{self, vbus_detect::HardwareVbusDetect}};
+use embassy_nrf::{
+    bind_interrupts, pac, peripherals,
+    usb::{self, vbus_detect::HardwareVbusDetect},
+};
 use embassy_usb::class::msc::subclass::scsi::block_device::{BlockDevice, BlockDeviceError};
 use embassy_usb::class::msc::subclass::scsi::Scsi;
 use embassy_usb::class::msc::transport::bulk_only::BulkOnlyTransport;
 use embassy_usb::Builder;
-use embassy_futures::join::join;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -46,6 +49,10 @@ impl BlockDevice for &mut RamBlockDevice {
 
     async fn write_block(&mut self, lba: u32, block: &[u8]) -> Result<(), BlockDeviceError> {
         self.data[lba as usize * BLOCK_SIZE..(lba as usize + 1) * BLOCK_SIZE].copy_from_slice(block);
+        Ok(())
+    }
+
+    async fn flush(&self) -> Result<(), BlockDeviceError> {
         Ok(())
     }
 }
@@ -100,12 +107,7 @@ async fn main(_spawner: Spawner) {
 
     // Create SCSI target for our block device
     let mut scsi_buffer = [0u8; BLOCK_SIZE];
-    let scsi = Scsi::new(
-        ram_block_device,
-        &mut scsi_buffer,
-        "Embassy",
-        "MSC",
-    );
+    let scsi = Scsi::new(ram_block_device, &mut scsi_buffer, "Embassy", "MSC");
 
     // Use bulk-only transport for our SCSI target
     let mut msc_transport = BulkOnlyTransport::new(&mut builder, &mut state, 64, scsi);

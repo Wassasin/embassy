@@ -6,14 +6,19 @@ use core::ops::Range;
 
 use defmt::*;
 use embassy_executor::Spawner;
+use embassy_futures::join::join;
 use embassy_nrf::usb::Driver;
-use embassy_nrf::{nvmc::Nvmc, bind_interrupts, pac, peripherals, usb::{self, vbus_detect::HardwareVbusDetect}};
+use embassy_nrf::{
+    bind_interrupts,
+    nvmc::Nvmc,
+    pac, peripherals,
+    usb::{self, vbus_detect::HardwareVbusDetect},
+};
 use embassy_usb::class::msc::subclass::scsi::block_device::{BlockDevice, BlockDeviceError};
 use embassy_usb::class::msc::subclass::scsi::Scsi;
 use embassy_usb::class::msc::transport::bulk_only::BulkOnlyTransport;
 use embassy_usb::Builder;
 use embedded_storage::nor_flash::NorFlash;
-use embassy_futures::join::join;
 use {defmt_rtt as _, panic_probe as _};
 
 // WARNING: this example is way too slow to
@@ -56,11 +61,13 @@ impl<FLASH: NorFlash> BlockDevice for FlashBlockDevice<FLASH> {
         let mut flash = self.flash.borrow_mut();
         let start = self.range.start as u32 + (lba * BLOCK_SIZE as u32);
         flash
-            .erase(start, start+block.len() as u32)
+            .erase(start, start + block.len() as u32)
             .map_err(|_| BlockDeviceError::WriteError)?;
-        flash
-            .write(start, block)
-            .map_err(|_| BlockDeviceError::WriteError)?;
+        flash.write(start, block).map_err(|_| BlockDeviceError::WriteError)?;
+        Ok(())
+    }
+
+    async fn flush(&self) -> Result<(), BlockDeviceError> {
         Ok(())
     }
 }
