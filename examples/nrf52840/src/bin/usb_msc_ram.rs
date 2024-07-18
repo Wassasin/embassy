@@ -107,7 +107,7 @@ async fn main(_spawner: Spawner) {
 
     // Create SCSI target for our block device
     let mut scsi_buffer = [0u8; BLOCK_SIZE];
-    let scsi = Scsi::new(ram_block_device, &mut scsi_buffer, "Embassy", "MSC");
+    let scsi = Scsi::new(ram_block_device, &mut scsi_buffer, "Embassy", "MSC", "1234");
 
     // Use bulk-only transport for our SCSI target
     let mut msc_transport = BulkOnlyTransport::new(&mut builder, &mut state, 64, scsi);

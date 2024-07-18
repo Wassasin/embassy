@@ -41,15 +41,19 @@ pub struct Scsi<'d, B: BlockDevice> {
     sense: Option<SenseData>,
     vendor_id: [u8; 8],
     product_id: [u8; 16],
+    serial_id: [u8; 8],
 }
 
 impl<'d, B: BlockDevice> Scsi<'d, B> {
-    pub fn new(device: B, buffer: &'d mut [u8], vendor: &str, product: &str) -> Self {
+    pub fn new(device: B, buffer: &'d mut [u8], vendor: &str, product: &str, serial: &str) -> Self {
         let mut vendor_id = [b' '; 8];
         fill_from_slice(&mut vendor_id, vendor.as_bytes());
 
         let mut product_id = [b' '; 16];
         fill_from_slice(&mut product_id, product.as_bytes());
+
+        let mut serial_id = [b' '; 8];
+        fill_from_slice(&mut serial_id, serial.as_bytes());
 
         Self {
             device,
@@ -57,6 +61,7 @@ impl<'d, B: BlockDevice> Scsi<'d, B> {
             sense: None,
             vendor_id,
             product_id,
+            serial_id,
         }
     }
 
@@ -171,13 +176,12 @@ impl<'d, B: BlockDevice> Scsi<'d, B> {
                             Ok(())
                         }
                         Ok(VitalProductDataPage::UnitSerialNumber) => {
-                            const SERIAL_NUMBER: &[u8; 8] = b"01020304";
-                            let mut buf = [0u8; UnitSerialNumberPage::SIZE + SERIAL_NUMBER.len()];
+                            let mut buf = [0u8; UnitSerialNumberPage::SIZE + 8];
                             let mut usnp = UnitSerialNumberPage::from_bytes(&mut buf).unwrap();
                             usnp.set_page_code(VitalProductDataPage::UnitSerialNumber);
-                            usnp.set_page_length(SERIAL_NUMBER.len() as u8);
+                            usnp.set_page_length(self.serial_id.len() as u8);
 
-                            buf[UnitSerialNumberPage::SIZE..].copy_from_slice(SERIAL_NUMBER);
+                            buf[UnitSerialNumberPage::SIZE..].copy_from_slice(&self.serial_id);
 
                             pipe.write(&buf).await?;
                             Ok(())
