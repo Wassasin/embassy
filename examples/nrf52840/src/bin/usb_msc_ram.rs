@@ -30,10 +30,6 @@ struct RamBlockDevice {
 }
 
 impl BlockDevice for &mut RamBlockDevice {
-    fn status(&self) -> Result<(), BlockDeviceError> {
-        Ok(())
-    }
-
     fn block_size(&self) -> Result<usize, BlockDeviceError> {
         Ok(BLOCK_SIZE)
     }
@@ -49,10 +45,6 @@ impl BlockDevice for &mut RamBlockDevice {
 
     async fn write_block(&mut self, lba: u32, block: &[u8]) -> Result<(), BlockDeviceError> {
         self.data[lba as usize * BLOCK_SIZE..(lba as usize + 1) * BLOCK_SIZE].copy_from_slice(block);
-        Ok(())
-    }
-
-    async fn flush(&self) -> Result<(), BlockDeviceError> {
         Ok(())
     }
 }

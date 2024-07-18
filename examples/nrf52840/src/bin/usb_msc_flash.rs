@@ -37,10 +37,6 @@ struct FlashBlockDevice<FLASH: NorFlash> {
 }
 
 impl<FLASH: NorFlash> BlockDevice for FlashBlockDevice<FLASH> {
-    fn status(&self) -> Result<(), BlockDeviceError> {
-        Ok(())
-    }
-
     fn block_size(&self) -> Result<usize, BlockDeviceError> {
         Ok(BLOCK_SIZE)
     }
@@ -64,10 +60,6 @@ impl<FLASH: NorFlash> BlockDevice for FlashBlockDevice<FLASH> {
             .erase(start, start + block.len() as u32)
             .map_err(|_| BlockDeviceError::WriteError)?;
         flash.write(start, block).map_err(|_| BlockDeviceError::WriteError)?;
-        Ok(())
-    }
-
-    async fn flush(&self) -> Result<(), BlockDeviceError> {
         Ok(())
     }
 }

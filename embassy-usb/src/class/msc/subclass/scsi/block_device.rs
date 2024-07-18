@@ -22,11 +22,6 @@ pub enum BlockDeviceError {
 }
 
 pub trait BlockDevice {
-    /// Called for periodic `TEST UNIT READY` SCSI requests.
-    ///
-    /// Should return error if device is not ready (i.e. [BlockDeviceError::MediumNotPresent] if SD card is not present).
-    fn status(&self) -> Result<(), BlockDeviceError>;
-
     /// The number of bytes per block. This determines the size of the buffer passed
     /// to read/write functions.
     fn block_size(&self) -> Result<usize, BlockDeviceError>;
@@ -40,9 +35,18 @@ pub trait BlockDevice {
     /// Write the `block` buffer to the block indicated by `lba`
     async fn write_block(&mut self, lba: u32, block: &[u8]) -> Result<(), BlockDeviceError>;
 
+    /// Called for periodic `TEST UNIT READY` SCSI requests.
+    ///
+    /// Should return error if device is not ready (i.e. [BlockDeviceError::MediumNotPresent] if SD card is not present).
+    fn status(&self) -> Result<(), BlockDeviceError> {
+        Ok(())
+    }
+
     /// If any operations are pending, finalize them and only return when that has occurred.
     ///
     /// Examples where this might be relevant is when the BlockDevice has some internal buffer that is asynchronously flushed,
     /// or when the backing storage is a SD card that can asynchronously perform writes.
-    async fn flush(&self) -> Result<(), BlockDeviceError>;
+    async fn flush(&mut self) -> Result<(), BlockDeviceError> {
+        Ok(())
+    }
 }
