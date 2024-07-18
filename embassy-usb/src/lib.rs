@@ -1,7 +1,7 @@
 #![no_std]
 #![doc = include_str!("../README.md")]
 #![allow(async_fn_in_trait)]
-// #![warn(missing_docs)]
+#![warn(missing_docs)]
 
 // This mod MUST go first, so that the others see its macros.
 pub(crate) mod fmt;

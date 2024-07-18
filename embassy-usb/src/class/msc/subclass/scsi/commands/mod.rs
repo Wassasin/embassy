@@ -33,3 +33,7 @@ pub use request_sense::*;
 
 mod write;
 pub use write::*;
+
+pub trait Command {
+    const OPCODE: u8;
+}

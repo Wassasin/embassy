@@ -1,6 +1,5 @@
-use super::control::Control;
-use crate::packed::BE;
-use crate::packed_struct;
+use super::{control::Control, Command};
+use crate::packed::{packed_struct, BE};
 
 packed_struct! {
     pub struct ReadFormatCapacitiesCommand<10> {
@@ -15,8 +14,8 @@ packed_struct! {
     }
 }
 
-impl ReadFormatCapacitiesCommand<[u8; ReadFormatCapacitiesCommand::SIZE]> {
-    pub const OPCODE: u8 = 0x23;
+impl Command for ReadFormatCapacitiesCommand<[u8; ReadFormatCapacitiesCommand::SIZE]> {
+    const OPCODE: u8 = 0x23;
 }
 
 packed_struct! {

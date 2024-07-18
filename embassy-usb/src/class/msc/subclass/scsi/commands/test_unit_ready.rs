@@ -1,5 +1,5 @@
-use super::control::Control;
-use crate::packed_struct;
+use super::{control::Control, Command};
+use crate::packed::packed_struct;
 
 packed_struct! {
     pub struct TestUnitReadyCommand<6> {
@@ -10,6 +10,6 @@ packed_struct! {
     }
 }
 
-impl TestUnitReadyCommand<[u8; TestUnitReadyCommand::SIZE]> {
-    pub const OPCODE: u8 = 0x00;
+impl Command for TestUnitReadyCommand<[u8; TestUnitReadyCommand::SIZE]> {
+    const OPCODE: u8 = 0x00;
 }

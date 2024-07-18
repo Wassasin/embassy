@@ -1,6 +1,5 @@
 use crate::class::msc::subclass::scsi::enums::{MediumType, Mrie};
-use crate::packed::BE;
-use crate::{packed_enum, packed_struct};
+use crate::packed::{packed_enum, packed_struct, BE};
 
 packed_struct! {
     pub struct ModeParameterHeader6<4> {

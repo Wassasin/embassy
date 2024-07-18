@@ -1,5 +1,5 @@
-use super::control::Control;
-use crate::packed_struct;
+use super::{control::Control, Command};
+use crate::packed::packed_struct;
 
 packed_struct! {
     pub struct PreventAllowMediumRemoval<6> {
@@ -12,6 +12,6 @@ packed_struct! {
     }
 }
 
-impl PreventAllowMediumRemoval<[u8; PreventAllowMediumRemoval::SIZE]> {
-    pub const OPCODE: u8 = 0x1E;
+impl Command for PreventAllowMediumRemoval<[u8; PreventAllowMediumRemoval::SIZE]> {
+    const OPCODE: u8 = 0x1E;
 }

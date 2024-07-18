@@ -1,5 +1,5 @@
-use super::control::Control;
-use crate::packed_struct;
+use super::{control::Control, Command};
+use crate::packed::packed_struct;
 
 packed_struct! {
     pub struct StartStopUnitCommand<6> {
@@ -22,6 +22,6 @@ packed_struct! {
     }
 }
 
-impl StartStopUnitCommand<[u8; StartStopUnitCommand::SIZE]> {
-    pub const OPCODE: u8 = 0x1B;
+impl Command for StartStopUnitCommand<[u8; StartStopUnitCommand::SIZE]> {
+    const OPCODE: u8 = 0x1B;
 }

@@ -1,9 +1,12 @@
+//! Transport protocol implementations for Mass Storage Class.
+
 use embassy_usb_driver::EndpointError;
 
 use super::MscSubclass;
 
 pub mod bulk_only;
 
+/// Errors related to interacting with implementations of [DataPipeIn] and [DataPipeOut].
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum DataPipeError {
@@ -21,10 +24,13 @@ impl From<EndpointError> for DataPipeError {
     }
 }
 
+/// Errors returned by implementations of [CommandSetHandler].
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum CommandError {
+    /// An error related to handling command-specific data has occurred.
     PipeError(DataPipeError),
+    /// A general error has occurred while processing a command.
     CommandError,
 }
 
@@ -52,7 +58,7 @@ pub trait DataPipeOut {
     async fn read(&mut self, buf: &mut [u8]) -> Result<(), DataPipeError>;
 }
 
-/// Implemented by mass storage subclasses (i.e. SCSI).
+/// Implemented by Mass Storage subclasses (also called Programming Interfaces) like [super::subclass::scsi].
 ///
 /// This trait is tailored to bulk-only transport and may require changes for other transports.
 pub trait CommandSetHandler {

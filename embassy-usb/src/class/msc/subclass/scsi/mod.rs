@@ -1,25 +1,30 @@
-// pub mod bitfield;
+//! Small Computer System Interface (SCSI).
+
 pub mod block_device;
-pub mod commands;
-pub mod enums;
+mod commands;
+mod enums;
 
 use commands::StartStopUnitCommand;
 
 use self::block_device::{BlockDevice, BlockDeviceError};
 use self::enums::AdditionalSenseCode;
-use crate::class::msc::subclass::scsi::commands::{
-    CachingModePage, InformationalExceptionsControlModePage, InquiryCommand, InquiryResponse, ModeParameter6Writer,
-    ModeSense6Command, PageCode, PreventAllowMediumRemoval, Read10Command, ReadCapacity10Command,
-    ReadCapacity10Response, ReadFormatCapacitiesCommand, ReadFormatCapacitiesResponse, RequestSenseCommand,
-    RequestSenseResponse, SupportedVitalProductDataPages, TestUnitReadyCommand, UnitSerialNumberPage,
-    VitalProductDataPage, Write10Command,
+use crate::class::msc::{
+    subclass::scsi::{
+        commands::{
+            CachingModePage, Command, InformationalExceptionsControlModePage, InquiryCommand, InquiryResponse,
+            ModeParameter6Writer, ModeSense6Command, PageCode, PreventAllowMediumRemoval, Read10Command,
+            ReadCapacity10Command, ReadCapacity10Response, ReadFormatCapacitiesCommand, ReadFormatCapacitiesResponse,
+            RequestSenseCommand, RequestSenseResponse, SupportedVitalProductDataPages, TestUnitReadyCommand,
+            UnitSerialNumberPage, VitalProductDataPage, Write10Command,
+        },
+        enums::{
+            PeripheralDeviceType, PeripheralQualifier, ResponseCode, ResponseDataFormat, SenseKey, SpcVersion,
+            TargetPortGroupSupport,
+        },
+    },
+    transport::{self, CommandSetHandler},
+    MscSubclass,
 };
-use crate::class::msc::subclass::scsi::enums::{
-    PeripheralDeviceType, PeripheralQualifier, ResponseCode, ResponseDataFormat, SenseKey, SpcVersion,
-    TargetPortGroupSupport,
-};
-use crate::class::msc::transport::{self, CommandSetHandler};
-use crate::class::msc::MscSubclass;
 
 /// Stores information (errors) about last operation.
 ///
@@ -33,6 +38,7 @@ pub struct SenseData {
     asc: AdditionalSenseCode,
 }
 
+/// Small Computer System Interface (SCSI) programming interface that manages an underlying [BlockDevice].
 pub struct Scsi<'d, B: BlockDevice> {
     /// Backing storage block device
     device: B,
@@ -45,6 +51,9 @@ pub struct Scsi<'d, B: BlockDevice> {
 }
 
 impl<'d, B: BlockDevice> Scsi<'d, B> {
+    /// Create a new interface with a backing buffer, and identifying vendor (length 8), product (length 16) and serial number (length 8).
+    ///
+    /// The backing buffer must be at least as large as [`BlockDevice::block_size`].
     pub fn new(device: B, buffer: &'d mut [u8], vendor: &str, product: &str, serial: &str) -> Self {
         let mut vendor_id = [b' '; 8];
         fill_from_slice(&mut vendor_id, vendor.as_bytes());

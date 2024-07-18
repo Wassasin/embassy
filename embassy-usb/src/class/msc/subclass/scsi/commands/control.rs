@@ -1,4 +1,4 @@
-use crate::packed_struct;
+use crate::packed::packed_struct;
 
 packed_struct! {
     pub struct Control<1> {

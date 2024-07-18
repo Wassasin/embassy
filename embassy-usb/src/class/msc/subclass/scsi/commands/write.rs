@@ -1,6 +1,5 @@
-use super::control::Control;
-use crate::packed::BE;
-use crate::packed_struct;
+use super::{control::Control, Command};
+use crate::packed::{packed_struct, BE};
 
 packed_struct! {
     pub struct Write10Command<10> {
@@ -35,6 +34,6 @@ packed_struct! {
     }
 }
 
-impl Write10Command<[u8; Write10Command::SIZE]> {
-    pub const OPCODE: u8 = 0x2A;
+impl Command for Write10Command<[u8; Write10Command::SIZE]> {
+    const OPCODE: u8 = 0x2A;
 }

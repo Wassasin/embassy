@@ -1,6 +1,5 @@
-use super::control::Control;
-use crate::packed::BE;
-use crate::packed_struct;
+use super::{control::Control, Command};
+use crate::packed::{packed_struct, BE};
 
 packed_struct! {
     pub struct Read10Command<10> {
@@ -42,6 +41,6 @@ packed_struct! {
     }
 }
 
-impl Read10Command<[u8; Read10Command::SIZE]> {
-    pub const OPCODE: u8 = 0x28;
+impl Command for Read10Command<[u8; Read10Command::SIZE]> {
+    const OPCODE: u8 = 0x28;
 }

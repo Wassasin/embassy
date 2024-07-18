@@ -1,7 +1,6 @@
-use super::control::Control;
+use super::{control::Control, Command};
 use crate::class::msc::subclass::scsi::enums::{ResponseCode, SenseKey};
-use crate::packed::BE;
-use crate::packed_struct;
+use crate::packed::{packed_struct, BE};
 
 packed_struct! {
     pub struct RequestSenseCommand<6> {
@@ -16,8 +15,8 @@ packed_struct! {
     }
 }
 
-impl RequestSenseCommand<[u8; RequestSenseCommand::SIZE]> {
-    pub const OPCODE: u8 = 0x03;
+impl Command for RequestSenseCommand<[u8; RequestSenseCommand::SIZE]> {
+    const OPCODE: u8 = 0x03;
 }
 
 packed_struct! {

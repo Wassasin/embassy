@@ -1,7 +1,5 @@
-use super::control::Control;
-use super::PageCode;
-use crate::class::msc::subclass::scsi::enums::PageControl;
-use crate::packed_struct;
+use super::{control::Control, Command, PageCode};
+use crate::{class::msc::subclass::scsi::enums::PageControl, packed::packed_struct};
 
 packed_struct! {
     pub struct ModeSense6Command<6> {
@@ -26,6 +24,6 @@ packed_struct! {
     }
 }
 
-impl ModeSense6Command<[u8; ModeSense6Command::SIZE]> {
-    pub const OPCODE: u8 = 0x1A;
+impl Command for ModeSense6Command<[u8; ModeSense6Command::SIZE]> {
+    const OPCODE: u8 = 0x1A;
 }

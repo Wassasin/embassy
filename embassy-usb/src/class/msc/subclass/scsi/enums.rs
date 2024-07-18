@@ -1,4 +1,4 @@
-use crate::packed_enum;
+use crate::packed::packed_enum;
 
 packed_enum! {
     #[derive(Clone, Copy, Eq, PartialEq, Debug)]
@@ -193,6 +193,7 @@ packed_enum! {
 pub enum AdditionalSenseCode {
     /// ASC 0x20, ASCQ: 0x0 - INVALID COMMAND OPERATION CODE
     InvalidCommandOperationCode,
+    #[allow(unused)]
     /// ASC 0x64, ASCQ: 0x1 - INVALID PACKET SIZE
     InvalidPacketSize,
     /// ASC 0x24, ASCQ: 0x0 - INVALID FIELD IN CDB

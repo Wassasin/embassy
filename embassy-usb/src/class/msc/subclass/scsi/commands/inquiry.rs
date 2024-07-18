@@ -1,9 +1,8 @@
-use super::Control;
+use super::{Command, Control};
 use crate::class::msc::subclass::scsi::enums::{
     PeripheralDeviceType, PeripheralQualifier, ResponseDataFormat, SpcVersion, TargetPortGroupSupport,
 };
-use crate::packed::BE;
-use crate::{packed_enum, packed_struct};
+use crate::packed::{packed_enum, packed_struct, BE};
 
 packed_enum! {
     #[derive(Clone, Copy, Eq, PartialEq, Debug)]
@@ -29,8 +28,8 @@ packed_struct! {
     }
 }
 
-impl InquiryCommand<[u8; InquiryCommand::SIZE]> {
-    pub const OPCODE: u8 = 0x12;
+impl Command for InquiryCommand<[u8; InquiryCommand::SIZE]> {
+    const OPCODE: u8 = 0x12;
 }
 
 packed_struct! {

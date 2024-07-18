@@ -141,7 +141,6 @@ impl_packed_field_int!(i16, 16);
 impl_packed_field_int!(i32, 32);
 impl_packed_field_int!(i64, 64);
 
-#[macro_export]
 macro_rules! packed_struct {
     (
         $(#[$meta:meta])*
@@ -162,6 +161,7 @@ macro_rules! packed_struct {
             /// Packed struct size in bytes
             pub const SIZE: usize = $size;
 
+            #[allow(unused)]
             pub fn new() -> Self {
                 Self {
                     data: [0u8; Self::SIZE]
@@ -174,6 +174,7 @@ macro_rules! packed_struct {
                 Self { data }
             }
 
+            #[allow(unused)]
             pub fn from_bytes(buf: T) -> Option<Self> {
                 if buf.as_ref().len() < $name::SIZE {
                     None
@@ -199,6 +200,7 @@ macro_rules! packed_struct {
             $(
                 paste::paste! {
                     $(#[doc = $field_doc])*
+                    #[allow(unused)]
                     #[inline]
                     pub fn [<set_$field>](&mut self, val: <$ty as crate::packed::PackedField>::Set<'_>) {
                         const _: () = core::assert!($offset + $bit_size <= $size * 8, "Field offset is out of range");
@@ -248,7 +250,6 @@ macro_rules! packed_struct {
     }
 }
 
-#[macro_export]
 macro_rules! packed_enum {
     (
         $(#[$meta:meta])*
@@ -303,3 +304,6 @@ macro_rules! packed_enum {
         }
     };
 }
+
+pub(crate) use packed_enum;
+pub(crate) use packed_struct;

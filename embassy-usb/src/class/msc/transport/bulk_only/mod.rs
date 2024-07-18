@@ -1,5 +1,19 @@
-pub mod cbw;
-pub mod csw;
+//! Bulk-Only Transport (BOT) protocol of the Mass Storage Class.
+//!
+//! This protocol has three stages:
+//! * Receives a command (CBW)
+//! * Data is sent or received
+//! * Responds with a Status (CSW)
+//!
+//! Processing of commands happens in a loop in the [`BulkOnlyTransport::run`] method.
+//!
+//! ## Endpoints
+//! The Bulk-Only Transport makes use of four endpoints:
+//! * Control IN and OUT (default endpoints) for enumeration and MSC class-specific requests.
+//! * Bulk IN and OUT for sending/receiving data, as well as sending CSW and receiving CBW.
+
+mod cbw;
+mod csw;
 
 use core::mem::{size_of, MaybeUninit};
 
@@ -17,6 +31,7 @@ use crate::{Builder, Handler};
 const REQ_GET_MAX_LUN: u8 = 0xFE;
 const REQ_BULK_ONLY_RESET: u8 = 0xFF;
 
+/// State of the Bulk-Only Transport that ensures that the Programming Interface and USB Bus can access the same endpoints.
 pub struct State {
     control: MaybeUninit<Control>,
 }
@@ -29,7 +44,7 @@ impl Default for State {
     }
 }
 
-pub struct Control {
+struct Control {
     max_lun: u8,
     if_num: InterfaceNumber,
 }
@@ -55,6 +70,7 @@ impl Handler for Control {
     }
 }
 
+/// Bulk-Only Transport handler for the Mass Storage Class.
 pub struct BulkOnlyTransport<'d, D: Driver<'d>, C: CommandSetHandler> {
     read_ep: D::EndpointOut,
     write_ep: D::EndpointIn,
@@ -63,6 +79,11 @@ pub struct BulkOnlyTransport<'d, D: Driver<'d>, C: CommandSetHandler> {
 }
 
 impl<'d, D: Driver<'d>, C: CommandSetHandler> BulkOnlyTransport<'d, D, C> {
+    /// Create a new Bulk-Only Transport handler for an USB [Builder] and a Programming Interface [CommandSetHandler].
+    ///
+    /// The [State] should be initialized outside of this object using [Default::default] such that the [Builder] can access it.
+    ///
+    /// The `max_packet_size` should fit into the [Builder] control buffer.
     pub fn new(builder: &mut Builder<'d, D>, state: &'d mut State, max_packet_size: u16, handler: C) -> Self {
         assert!(C::MAX_LUN < 16, "BulkOnlyTransport supports maximum 16 LUNs");
 
@@ -173,6 +194,7 @@ impl<'d, D: Driver<'d>, C: CommandSetHandler> BulkOnlyTransport<'d, D, C> {
         CommandStatusWrapper::new(cbw.tag, pipe_in.data_residue, status)
     }
 
+    /// Process incoming commands and drive the Programming Interface to consume/generate data and status messages.
     pub async fn run(&mut self) {
         loop {
             let cbw = self.receive_control_block_wrapper().await;
@@ -195,7 +217,7 @@ impl<'d, D: Driver<'d>, C: CommandSetHandler> BulkOnlyTransport<'d, D, C> {
     }
 }
 
-pub struct BulkOnlyTransportDataPipeIn<'d, E: EndpointIn> {
+struct BulkOnlyTransportDataPipeIn<'d, E: EndpointIn> {
     ep: &'d mut E,
     // requested transfer size minus already transfered bytes
     data_residue: u32,
@@ -234,7 +256,7 @@ impl<'d, E: EndpointIn> BulkOnlyTransportDataPipeIn<'d, E> {
     }
 }
 
-pub struct BulkOnlyTransportDataPipeOut<'d, E: EndpointOut> {
+struct BulkOnlyTransportDataPipeOut<'d, E: EndpointOut> {
     ep: &'d mut E,
     // requested transfer size minus already transfered bytes
     data_residue: u32,

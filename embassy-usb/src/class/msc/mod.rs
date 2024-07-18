@@ -1,3 +1,5 @@
+//! MSC class implementation, aka USB Mass Storage Class.
+
 pub mod subclass;
 pub mod transport;
 
