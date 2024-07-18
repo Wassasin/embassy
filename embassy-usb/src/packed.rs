@@ -235,6 +235,7 @@ macro_rules! packed_struct {
             }
         }
 
+        #[cfg(feature = "defmt")]
         impl<T: AsRef<[u8]>> defmt::Format for $name<T> {
             fn format(&self, f: defmt::Formatter) {
                 defmt::write!(f, "{} {{ ", stringify!($name));

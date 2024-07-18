@@ -199,19 +199,6 @@ impl<'d, B: BlockDevice> Scsi<'d, B> {
                 let req = ModeSense6Command::from_bytes(cmd).ok_or(InternalError::CommandParseError)?;
                 debug!("{:?} {:?}", req, cmd);
 
-                // let mut buf = [0u8; ModeParameterHeader6::SIZE + CachingModePage::SIZE];
-                // let mut header = ModeParameterHeader6::from_bytes(&mut buf[..ModeParameterHeader6::SIZE]).unwrap();
-                // header.set_mode_data_length((ModeParameterHeader6::SIZE + CachingModePage::SIZE - 1) as u8);
-
-                // let mut caching_mode_page =
-                //     CachingModePage::from_bytes(&mut buf[ModeParameterHeader6::SIZE..]).unwrap();
-                // caching_mode_page.set_page_code(PageCode::CachingModePage);
-                // caching_mode_page.set_page_length(CachingModePage::SIZE as u8 - 2);
-                // caching_mode_page.set_read_cache_disable(true);
-                // caching_mode_page.set_write_cache_enable(false);
-
-                // pipe.write(&buf).await?;
-
                 let mut writer = ModeParameter6Writer::new(self.buffer).map_err(|_| ERR_INVALID_FIELD_IN_CBD)?;
 
                 let all_pages = matches!(req.page_code(), Ok(PageCode::AllPages));
