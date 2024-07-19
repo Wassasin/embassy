@@ -1,22 +1,21 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
-#![feature(async_fn_in_trait)]
 
 use core::cell::RefCell;
 
 use defmt::{panic, *};
 use embassy_executor::Spawner;
-use embassy_stm32::peripherals::{DMA2_CH6, SDIO};
-use embassy_stm32::sdmmc::Sdmmc;
-use embassy_stm32::time::{mhz, Hertz};
-use embassy_stm32::usb_otg::Driver;
-use embassy_stm32::{interrupt, Config};
+use embassy_futures::join::join;
+use embassy_stm32::peripherals::{self, DMA2_CH6, SDIO};
+use embassy_stm32::sdmmc::{self, Sdmmc};
+use embassy_stm32::time::Hertz;
+use embassy_stm32::usb::{self, Driver};
+use embassy_stm32::{bind_interrupts, Config};
 use embassy_usb::class::msc::subclass::scsi::block_device::{BlockDevice, BlockDeviceError};
 use embassy_usb::class::msc::subclass::scsi::Scsi;
 use embassy_usb::class::msc::transport::bulk_only::BulkOnlyTransport;
 use embassy_usb::Builder;
-use futures::future::join;
+use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 // SDMMC driver only supports 512 byte blocks for now
@@ -39,7 +38,6 @@ impl<'d> BlockDevice for SdmmcBlockDevice<'d> {
     }
 
     fn num_blocks(&self) -> Result<u32, BlockDeviceError> {
-        // Ok(128)
         Ok((self.sdmmc.borrow().card().unwrap().csd.card_size() / BLOCK_SIZE as u64) as u32)
     }
 
@@ -75,36 +73,50 @@ impl<'d> BlockDevice for SdmmcBlockDevice<'d> {
 #[repr(align(4))]
 struct AlignedBuffer([u8; BLOCK_SIZE]);
 
+bind_interrupts!(struct Irqs {
+    OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
+    SDIO => sdmmc::InterruptHandler<peripherals::SDIO>;
+});
+
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     info!("Hello World!");
 
     let mut config = Config::default();
-    config.rcc.pll48 = true;
-    config.rcc.sys_ck = Some(mhz(48));
-
+    {
+        use embassy_stm32::rcc::*;
+        config.rcc.hse = Some(Hse {
+            freq: Hertz(8_000_000),
+            mode: HseMode::Bypass,
+        });
+        config.rcc.pll_src = PllSource::HSE;
+        config.rcc.pll = Some(Pll {
+            prediv: PllPreDiv::DIV4,
+            mul: PllMul::MUL168,
+            divp: Some(PllPDiv::DIV2), // 8mhz / 4 * 168 / 2 = 168Mhz.
+            divq: Some(PllQDiv::DIV7), // 8mhz / 4 * 168 / 7 = 48Mhz.
+            divr: None,
+        });
+        config.rcc.ahb_pre = AHBPrescaler::DIV1;
+        config.rcc.apb1_pre = APBPrescaler::DIV4;
+        config.rcc.apb2_pre = APBPrescaler::DIV2;
+        config.rcc.sys = Sysclk::PLL1_P;
+        config.rcc.mux.clk48sel = mux::Clk48sel::PLL1_Q;
+    }
     let p = embassy_stm32::init(config);
 
-    let mut sdmmc = Sdmmc::new_4bit(
-        p.SDIO,
-        interrupt::take!(SDIO),
-        p.DMA2_CH6,
-        p.PC12,
-        p.PD2,
-        p.PC8,
-        p.PC9,
-        p.PC10,
-        p.PC11,
-        Default::default(),
-    );
-
-    sdmmc.init_card(SDIO_FREQ).await.expect("SD card init failed");
-    info!("Initialized SD card: {:#?}", Debug2Format(sdmmc.card().unwrap()));
-
     // Create the driver, from the HAL.
-    let irq = interrupt::take!(OTG_FS);
-    let mut ep_out_buffer = [0u8; 256];
-    let driver = Driver::new_fs(p.USB_OTG_FS, irq, p.PA12, p.PA11, &mut ep_out_buffer);
+    static OUTPUT_BUFFER: StaticCell<[u8; 256]> = StaticCell::new();
+    let ep_out_buffer = &mut OUTPUT_BUFFER.init([0; 256])[..];
+    let mut config = embassy_stm32::usb::Config::default();
+
+    // Do not enable vbus_detection. This is a safe default that works in all boards.
+    // However, if your USB device is self-powered (can stay powered on if USB is unplugged), you need
+    // to enable vbus_detection to comply with the USB spec. If you enable it, the board
+    // has to support it or USB won't work at all. See docs on `vbus_detection` for details.
+    config.vbus_detection = false;
+
+    let driver = Driver::new_fs(p.USB_OTG_FS, Irqs, p.PA12, p.PA11, ep_out_buffer, config);
 
     // Create embassy-usb Config
     let mut config = embassy_usb::Config::new(0xc0de, 0xcafe);
@@ -137,6 +149,22 @@ async fn main(_spawner: Spawner) {
         &mut control_buf,
     );
 
+    let mut sdmmc = Sdmmc::new_4bit(
+        p.SDIO,
+        Irqs,
+        p.DMA2_CH6,
+        p.PC12,
+        p.PD2,
+        p.PC8,
+        p.PC9,
+        p.PC10,
+        p.PC11,
+        Default::default(),
+    );
+
+    sdmmc.init_card(SDIO_FREQ).await.expect("SD card init failed");
+    info!("Initialized SD card: {:#?}", Debug2Format(sdmmc.card().unwrap()));
+
     // Create SCSI target for our block device
     let mut scsi_buffer = AlignedBuffer([0u8; BLOCK_SIZE]);
     let scsi = Scsi::new(
@@ -146,6 +174,7 @@ async fn main(_spawner: Spawner) {
         &mut scsi_buffer.0,
         "Embassy",
         "MSC",
+        "1234",
     );
 
     // Use bulk-only transport for our SCSI target
