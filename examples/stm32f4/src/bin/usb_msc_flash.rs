@@ -7,7 +7,7 @@ use core::ops::Range;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_stm32::flash::{self, Flash};
+use embassy_stm32::flash;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::usb::{self, Driver};
 use embassy_stm32::{bind_interrupts, peripherals, Config};
@@ -15,7 +15,7 @@ use embassy_usb::class::msc::subclass::scsi::block_device::{BlockDevice, BlockDe
 use embassy_usb::class::msc::subclass::scsi::Scsi;
 use embassy_usb::class::msc::transport::bulk_only::BulkOnlyTransport;
 use embassy_usb::Builder;
-use embedded_storage::nor_flash::RmwMultiwriteNorFlashStorage;
+use embedded_storage::nor_flash::{NorFlash, RmwMultiwriteNorFlashStorage};
 use embedded_storage::{ReadStorage, Storage};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -30,8 +30,10 @@ use {defmt_rtt as _, panic_probe as _};
 // WARNING: this example is way too slow to
 const BLOCK_SIZE: usize = 512;
 
+type FlashRegion<'d> = flash::Bank2Region1<'d>;
+
 struct FlashBlockDevice<'d> {
-    flash: RefCell<RmwMultiwriteNorFlashStorage<'d, Flash<'d>>>,
+    flash: RefCell<RmwMultiwriteNorFlashStorage<'d, FlashRegion<'d>>>,
     range: Range<usize>,
 }
 
@@ -141,14 +143,14 @@ async fn main(_spawner: Spawner) {
         &mut control_buf,
     );
 
-    let mut flash_buffer = [0u8; flash::FLASH_SIZE];
-    let flash = RefCell::new(RmwMultiwriteNorFlashStorage::new(
-        Flash::new(p.FLASH, Irqs),
-        &mut flash_buffer,
-    ));
+    static BUFFER: StaticCell<[u8; FlashRegion::ERASE_SIZE]> = StaticCell::new();
+    let flash_buffer = BUFFER.init([0u8; FlashRegion::ERASE_SIZE]);
 
-    // Use upper 1MB of the 2MB flash
-    let range = (1024 * 1024)..(2048 * 1024);
+    let flash = flash::Flash::new(p.FLASH, Irqs);
+    let flash_region = flash.into_regions().bank2_region1;
+    let range = 0..(flash_region.0.size as usize);
+
+    let flash = RefCell::new(RmwMultiwriteNorFlashStorage::new(flash_region, flash_buffer));
 
     let mut scsi_buffer = [0u8; BLOCK_SIZE];
     // Create SCSI target for our block device

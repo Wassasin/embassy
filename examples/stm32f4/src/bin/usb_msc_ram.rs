@@ -21,7 +21,7 @@ struct RamBlockDevice {
     data: [u8; BLOCK_SIZE * 128],
 }
 
-impl BlockDevice for RamBlockDevice {
+impl BlockDevice for &mut RamBlockDevice {
     fn status(&self) -> Result<(), BlockDeviceError> {
         Ok(())
     }
@@ -120,17 +120,14 @@ async fn main(_spawner: Spawner) {
         &mut control_buf,
     );
 
+    static DEVICE: StaticCell<RamBlockDevice> = StaticCell::new();
+    let device = DEVICE.init(RamBlockDevice {
+        data: [0u8; BLOCK_SIZE * 128],
+    });
+
     // Create SCSI target for our block device
     let mut scsi_buffer = [0u8; BLOCK_SIZE];
-    let scsi = Scsi::new(
-        RamBlockDevice {
-            data: [0u8; BLOCK_SIZE * 128],
-        },
-        &mut scsi_buffer,
-        "Embassy",
-        "MSC",
-        "1234",
-    );
+    let scsi = Scsi::new(device, &mut scsi_buffer, "Embassy", "MSC", "1234");
 
     // Use bulk-only transport for our SCSI target
     let mut msc_transport = BulkOnlyTransport::new(&mut builder, &mut state, 64, scsi);
