@@ -258,7 +258,7 @@ foreach_flash_region! {
             }
         }
 
-        impl crate::_generated::flash_regions::$type_name<'_, Blocking> {
+        impl<MODE> crate::_generated::flash_regions::$type_name<'_, MODE> {
             /// Blocking write.
             ///
             /// NOTE: `offset` is an offset from the flash start, NOT an absolute address.
@@ -292,7 +292,7 @@ foreach_flash_region! {
             }
         }
 
-        impl embedded_storage::nor_flash::NorFlash for crate::_generated::flash_regions::$type_name<'_, Blocking> {
+        impl<MODE> embedded_storage::nor_flash::NorFlash for crate::_generated::flash_regions::$type_name<'_, MODE> {
             const WRITE_SIZE: usize = $write_size;
             const ERASE_SIZE: usize = $erase_size;
 
@@ -304,5 +304,7 @@ foreach_flash_region! {
                 self.blocking_erase(from, to)
             }
         }
+
+        impl<MODE> embedded_storage::nor_flash::MultiwriteNorFlash for crate::_generated::flash_regions::$type_name<'_, MODE> {}
     };
 }
