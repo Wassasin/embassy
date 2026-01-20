@@ -9,7 +9,7 @@ pub mod clocks; // still provide clock helpers
 pub mod dma;
 pub mod gpio;
 
-// pub mod adc;
+pub mod adc;
 // pub mod clkout;
 // pub mod config;
 // pub mod crc;
