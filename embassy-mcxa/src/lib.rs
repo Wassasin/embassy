@@ -18,8 +18,8 @@ pub mod gpio;
 // pub mod ostimer;
 // pub mod reset_reason;
 // pub mod rtc;
-// pub mod trng;
-// pub mod wwdt;
+pub mod trng;
+pub mod wwdt;
 
 use crate::interrupt::InterruptExt;
 pub use crate::pac::NVIC_PRIO_BITS;
