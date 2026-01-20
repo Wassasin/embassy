@@ -226,7 +226,7 @@ impl<'a> Adc<'a, Blocking> {
     /// # Arguments
     /// * `mask` - Bitmask of interrupt sources to enable
     pub fn enable_interrupt(&mut self, mask: u32) {
-        self.info.regs().ie().modify(|r, w| unsafe { w.bits(r.bits() | mask) });
+        self.info.regs().ie().modify(|w| unsafe { w.bits(r.bits() | mask) });
     }
 
     /// Disable ADC interrupts.
@@ -236,7 +236,7 @@ impl<'a> Adc<'a, Blocking> {
     /// # Arguments
     /// * `mask` - Bitmask of interrupt sources to disable
     pub fn disable_interrupt(&mut self, mask: u32) {
-        self.info.regs().ie().modify(|r, w| unsafe { w.bits(r.bits() & !mask) });
+        self.info.regs().ie().modify(|w| unsafe { w.bits(r.bits() & !mask) });
     }
 
     pub fn set_fifo_watermark(&mut self, watermark: u8) -> Result<()> {
@@ -779,7 +779,7 @@ macro_rules! impl_pin {
                 self.set_pull(crate::gpio::Pull::Disabled);
                 self.set_slew_rate(crate::gpio::SlewRate::Fast.into());
                 self.set_drive_strength(crate::gpio::DriveStrength::Normal.into());
-                self.set_function(crate::pac::port0::pcr0::Mux::$func);
+                self.set_function(crate::pac::port::pcr0::Mux::$func);
             }
         }
     };

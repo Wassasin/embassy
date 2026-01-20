@@ -157,14 +157,14 @@ mod sealed {
         ($pin:ident, $func:ident) => {
             impl ClockOutPin for crate::peripherals::$pin {
                 fn mux(&self) {
-                    self.set_function(crate::pac::port0::pcr0::Mux::$func);
+                    self.set_function(crate::pac::port::pcr0::Mux::$func);
                     self.set_pull(Pull::Disabled);
 
                     // TODO: we may want to expose these as options to allow the slew rate
                     // and drive strength for clocks if they are particularly high speed.
                     //
-                    // self.set_drive_strength(crate::pac::port0::pcr0::Dse::Dse1);
-                    // self.set_slew_rate(crate::pac::port0::pcr0::Sre::Sre0);
+                    // self.set_drive_strength(crate::pac::port::pcr0::Dse::Dse1);
+                    // self.set_slew_rate(crate::pac::port::pcr0::Sre::Sre0);
                 }
             }
         };

@@ -145,9 +145,7 @@ fn configure_baudrate(info: &'static Info, baudrate_bps: u32, clock_freq: u32) -
 /// Configure frame format (stop bits, data bits)
 fn configure_frame_format(info: &'static Info, config: &Config) {
     // Configure stop bits
-    info.regs()
-        .baud()
-        .modify(|w| w.sbns().variant(config.stop_bits_count));
+    info.regs().baud().modify(|w| w.sbns().variant(config.stop_bits_count));
 
     // Clear M10 for now (10-bit mode)
     info.regs().baud().modify(|w| w.m10().disabled());
@@ -386,7 +384,7 @@ macro_rules! impl_tx_pin {
                 self.set_pull(crate::gpio::Pull::Up);
                 self.set_slew_rate(crate::gpio::SlewRate::Fast.into());
                 self.set_drive_strength(crate::gpio::DriveStrength::Double.into());
-                self.set_function(crate::pac::port0::pcr0::Mux::$alt);
+                self.set_function(crate::pac::port::pcr0::Mux::$alt);
                 self.set_enable_input_buffer();
             }
         }
@@ -401,7 +399,7 @@ macro_rules! impl_rx_pin {
                 self.set_pull(crate::gpio::Pull::Up);
                 self.set_slew_rate(crate::gpio::SlewRate::Fast.into());
                 self.set_drive_strength(crate::gpio::DriveStrength::Double.into());
-                self.set_function(crate::pac::port0::pcr0::Mux::$alt);
+                self.set_function(crate::pac::port::pcr0::Mux::$alt);
                 self.set_enable_input_buffer();
             }
         }
@@ -913,10 +911,7 @@ impl<'a> LpuartTx<'a, Blocking> {
     }
 
     fn write_byte_internal(&mut self, byte: u8) -> Result<()> {
-        self.info
-            .regs()
-            .data()
-            .modify(|w| unsafe { w.bits(u32::from(byte)) });
+        self.info.regs().data().modify(|w| unsafe { w.bits(u32::from(byte)) });
 
         Ok(())
     }
@@ -1308,10 +1303,7 @@ impl<'a, T: Instance, C: DmaChannelTrait> LpuartTxDma<'a, T, C> {
     pub fn blocking_write(&mut self, buf: &[u8]) -> Result<()> {
         for &byte in buf {
             while self.info.regs().stat().read().tdre().is_txdata() {}
-            self.info
-                .regs()
-                .data()
-                .modify(|w| unsafe { w.bits(u32::from(byte)) });
+            self.info.regs().data().modify(|w| unsafe { w.bits(u32::from(byte)) });
         }
         Ok(())
     }
