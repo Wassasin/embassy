@@ -11,12 +11,9 @@ use super::{ClockError, Clocks, PoweredClock};
 use crate::pac::{
     self,
     mrcc0::vals::{
-        MrccAdcClkdivUnstab, MrccLpi2cClkdivHalt, MrccLpi2cClkdivReset, MrccLpi2cClkdivUnstab, MrccLpi2cClkselMux,
-        MrccLpuartClkdivHalt, MrccLpuartClkdivReset, MrccLpuartClkdivUnstab, MrccLpuartClkselMux,
+        AdcClkselMux, ClkdivHalt, ClkdivReset, ClkdivUnstab, Lpi2cClkselMux, LpuartClkselMux, OstimerClkselMux,
     },
 };
-use nxp_pac::mrcc0::vals::{MrccAdcClkdivHalt, MrccAdcClkdivReset, MrccAdcClkselMux, MrccOstimer0ClkselMux};
-use paste::paste;
 
 /// Sealed Peripheral Configuration Helper
 ///
@@ -77,20 +74,18 @@ macro_rules! apply_div4 {
         // set clksel
         $selreg.modify(|w| w.set_mux($selvar));
 
-        paste! {
-            // Set up clkdiv
-            $divreg.modify(|w| {
-                w.set_div($conf.div.into_bits());
-                w.set_halt([<Mrcc $groupprefix ClkdivHalt>]::OFF);
-                w.set_reset([<Mrcc $groupprefix ClkdivReset>]::OFF);
-            });
-            $divreg.modify(|w| {
-                w.set_halt([<Mrcc $groupprefix ClkdivHalt>]::ON);
-                w.set_reset([<Mrcc $groupprefix ClkdivReset>]::ON);
-            });
+        // Set up clkdiv
+        $divreg.modify(|w| {
+            w.set_div($conf.div.into_bits());
+            w.set_halt(ClkdivHalt::OFF);
+            w.set_reset(ClkdivReset::OFF);
+        });
+        $divreg.modify(|w| {
+            w.set_halt(ClkdivHalt::ON);
+            w.set_reset(ClkdivReset::ON);
+        });
 
-            while $divreg.read().unstab() == [<Mrcc $groupprefix ClkdivUnstab>]::OFF {}
-        }
+        while $divreg.read().unstab() == ClkdivUnstab::OFF {}
 
         Ok($freq / $conf.div.into_divisor())
     }};
@@ -241,30 +236,30 @@ impl SPConfHelper for Lpi2cConfig {
         let (freq, variant) = match self.source {
             Lpi2cClockSel::FroLfDiv => {
                 let freq = clocks.ensure_fro_lf_div_active(&self.power)?;
-                (freq, MrccLpi2cClkselMux::CLKROOT_FUNC_0)
+                (freq, Lpi2cClkselMux::CLKROOT_FUNC_0)
             }
             Lpi2cClockSel::FroHfDiv => {
                 let freq = clocks.ensure_fro_hf_div_active(&self.power)?;
-                (freq, MrccLpi2cClkselMux::CLKROOT_FUNC_2)
+                (freq, Lpi2cClkselMux::CLKROOT_FUNC_2)
             }
             Lpi2cClockSel::ClkIn => {
                 let freq = clocks.ensure_clk_in_active(&self.power)?;
-                (freq, MrccLpi2cClkselMux::CLKROOT_FUNC_3)
+                (freq, Lpi2cClkselMux::CLKROOT_FUNC_3)
             }
             Lpi2cClockSel::Clk1M => {
                 let freq = clocks.ensure_clk_1m_active(&self.power)?;
-                (freq, MrccLpi2cClkselMux::CLKROOT_FUNC_5)
+                (freq, Lpi2cClkselMux::CLKROOT_FUNC_5)
             }
             Lpi2cClockSel::Pll1ClkDiv => {
                 let freq = clocks.ensure_pll1_clk_div_active(&self.power)?;
-                (freq, MrccLpi2cClkselMux::CLKROOT_FUNC_6)
+                (freq, Lpi2cClkselMux::CLKROOT_FUNC_6)
             }
             Lpi2cClockSel::None => {
                 // no ClkrootFunc7, just write manually for now
-                clksel.write(|w| w.set_mux(MrccLpi2cClkselMux::_RESERVED_7));
+                clksel.write(|w| w.set_mux(Lpi2cClkselMux::_RESERVED_7));
                 clkdiv.modify(|w| {
-                    w.set_reset(MrccLpi2cClkdivReset::ON);
-                    w.set_halt(MrccLpi2cClkdivHalt::ON);
+                    w.set_reset(ClkdivReset::ON);
+                    w.set_halt(ClkdivHalt::ON);
                 });
                 return Ok(0);
             }
@@ -349,34 +344,34 @@ impl SPConfHelper for LpuartConfig {
         let (freq, variant) = match self.source {
             LpuartClockSel::FroLfDiv => {
                 let freq = clocks.ensure_fro_lf_div_active(&self.power)?;
-                (freq, MrccLpuartClkselMux::CLKROOT_FUNC_0)
+                (freq, LpuartClkselMux::CLKROOT_FUNC_0)
             }
             LpuartClockSel::FroHfDiv => {
                 let freq = clocks.ensure_fro_hf_div_active(&self.power)?;
-                (freq, MrccLpuartClkselMux::CLKROOT_FUNC_2)
+                (freq, LpuartClkselMux::CLKROOT_FUNC_2)
             }
             LpuartClockSel::ClkIn => {
                 let freq = clocks.ensure_clk_in_active(&self.power)?;
-                (freq, MrccLpuartClkselMux::CLKROOT_FUNC_3)
+                (freq, LpuartClkselMux::CLKROOT_FUNC_3)
             }
             LpuartClockSel::Clk16K => {
                 let freq = clocks.ensure_clk_16k_vdd_core_active(&self.power)?;
-                (freq, MrccLpuartClkselMux::CLKROOT_FUNC_4)
+                (freq, LpuartClkselMux::CLKROOT_FUNC_4)
             }
             LpuartClockSel::Clk1M => {
                 let freq = clocks.ensure_clk_1m_active(&self.power)?;
-                (freq, MrccLpuartClkselMux::CLKROOT_FUNC_5)
+                (freq, LpuartClkselMux::CLKROOT_FUNC_5)
             }
             LpuartClockSel::Pll1ClkDiv => {
                 let freq = clocks.ensure_pll1_clk_div_active(&self.power)?;
-                (freq, MrccLpuartClkselMux::CLKROOT_FUNC_6)
+                (freq, LpuartClkselMux::CLKROOT_FUNC_6)
             }
             LpuartClockSel::None => {
                 // no ClkrootFunc7, just write manually for now
-                clksel.write(|w| w.set_mux(MrccLpuartClkselMux::_RESERVED_7));
+                clksel.write(|w| w.set_mux(LpuartClkselMux::_RESERVED_7));
                 clkdiv.modify(|w| {
-                    w.set_reset(MrccLpuartClkdivReset::ON);
-                    w.set_halt(MrccLpuartClkdivHalt::ON);
+                    w.set_reset(ClkdivReset::ON);
+                    w.set_halt(ClkdivHalt::ON);
                 });
                 return Ok(0);
             }
@@ -418,20 +413,20 @@ impl SPConfHelper for OsTimerConfig {
                 let freq = clocks.ensure_clk_16k_vdd_core_active(&self.power)?;
                 mrcc0
                     .mrcc_ostimer0_clksel()
-                    .write(|w| w.set_mux(MrccOstimer0ClkselMux::CLKROOT_16K));
+                    .write(|w| w.set_mux(OstimerClkselMux::CLKROOT_16K));
                 freq
             }
             OstimerClockSel::Clk1M => {
                 let freq = clocks.ensure_clk_1m_active(&self.power)?;
                 mrcc0
                     .mrcc_ostimer0_clksel()
-                    .write(|w| w.set_mux(MrccOstimer0ClkselMux::CLKROOT_1M));
+                    .write(|w| w.set_mux(OstimerClkselMux::CLKROOT_1M));
                 freq
             }
             OstimerClockSel::None => {
                 mrcc0
                     .mrcc_ostimer0_clksel()
-                    .write(|w| w.set_mux(MrccOstimer0ClkselMux::_RESERVED_3));
+                    .write(|w| w.set_mux(OstimerClkselMux::_RESERVED_3));
                 0
             }
         })
@@ -476,32 +471,32 @@ impl SPConfHelper for AdcConfig {
         let (freq, variant) = match self.source {
             AdcClockSel::FroLfDiv => {
                 let freq = clocks.ensure_fro_lf_div_active(&self.power)?;
-                (freq, MrccAdcClkselMux::CLKROOT_FUNC_0)
+                (freq, AdcClkselMux::CLKROOT_FUNC_0)
             }
             AdcClockSel::FroHf => {
                 let freq = clocks.ensure_fro_hf_active(&self.power)?;
-                (freq, MrccAdcClkselMux::CLKROOT_FUNC_1)
+                (freq, AdcClkselMux::CLKROOT_FUNC_1)
             }
             AdcClockSel::ClkIn => {
                 let freq = clocks.ensure_clk_in_active(&self.power)?;
-                (freq, MrccAdcClkselMux::CLKROOT_FUNC_3)
+                (freq, AdcClkselMux::CLKROOT_FUNC_3)
             }
             AdcClockSel::Clk1M => {
                 let freq = clocks.ensure_clk_1m_active(&self.power)?;
-                (freq, MrccAdcClkselMux::CLKROOT_FUNC_5)
+                (freq, AdcClkselMux::CLKROOT_FUNC_5)
             }
             AdcClockSel::Pll1ClkDiv => {
                 let freq = clocks.ensure_pll1_clk_div_active(&self.power)?;
-                (freq, MrccAdcClkselMux::CLKROOT_FUNC_6)
+                (freq, AdcClkselMux::CLKROOT_FUNC_6)
             }
             AdcClockSel::None => {
                 mrcc0.mrcc_adc_clksel().write(|w| {
                     // no ClkrootFunc7, just write manually for now
-                    w.set_mux(MrccAdcClkselMux::_RESERVED_7)
+                    w.set_mux(AdcClkselMux::_RESERVED_7)
                 });
                 mrcc0.mrcc_adc_clkdiv().modify(|w| {
-                    w.set_reset(MrccAdcClkdivReset::ON);
-                    w.set_halt(MrccAdcClkdivHalt::ON);
+                    w.set_reset(ClkdivReset::ON);
+                    w.set_halt(ClkdivHalt::ON);
                 });
                 return Ok(0);
             }
