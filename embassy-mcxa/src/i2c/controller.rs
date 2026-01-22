@@ -3,9 +3,10 @@
 use core::future::Future;
 use core::marker::PhantomData;
 
+use crate::pac::lpi2c::vals::Cmd;
 use embassy_hal_internal::Peri;
 use embassy_hal_internal::drop::OnDrop;
-use crate::pac::lpi2c0::mtdr::Cmd;
+use nxp_pac::lpi2c::vals::{Alf, Dmf, Dozen, Epf, McrRrf, McrRtf, MsrFef, MsrSdf, Ndf, Pltf, Stf};
 
 use super::{Async, Blocking, Error, Info, Instance, InterruptHandler, Mode, Result, SclPin, SdaPin};
 use crate::clocks::periph_helpers::{Div4, Lpi2cClockSel, Lpi2cConfig};
@@ -118,59 +119,47 @@ impl<'d, M: Mode> I2c<'d, M> {
 
     fn set_configuration(&self, config: &Config) -> Result<()> {
         // Disable the controller.
-        critical_section::with(|_| self.info.regs().mcr().modify(|w| w.men().disabled()));
+        critical_section::with(|_| self.info.regs().mcr().modify(|w| w.set_men(false)));
 
         // Soft-reset the controller, read and write FIFOs.
         self.reset_fifos();
         critical_section::with(|_| {
-            self.info.regs().mcr().modify(|w| w.rst().reset());
+            self.info.regs().mcr().modify(|w| w.set_rst(true));
             // According to Reference Manual section 40.7.1.4, "There
             // is no minimum delay required before clearing the
             // software reset", therefore we clear it immediately.
-            self.info.regs().mcr().modify(|w| w.rst().not_reset());
+            self.info.regs().mcr().modify(|w| w.set_rst(false));
 
-            self.info
-                .regs()
-                .mcr()
-                .modify(|w| w.dozen().clear_bit().dbgen().clear_bit());
+            self.info.regs().mcr().modify(|w| {
+                w.set_dozen(Dozen::ENABLED);
+                w.set_dbgen(false);
+            });
         });
 
         let (clklo, clkhi, sethold, datavd) = config.speed.into();
 
         critical_section::with(|_| {
-            self.info.regs().mccr0().modify(|w| unsafe {
-                w.clklo()
-                    .bits(clklo)
-                    .clkhi()
-                    .bits(clkhi)
-                    .sethold()
-                    .bits(sethold)
-                    .datavd()
-                    .bits(datavd)
+            self.info.regs().mccr0().modify(|w| {
+                w.set_clklo(clklo);
+                w.set_clkhi(clkhi);
+                w.set_sethold(sethold);
+                w.set_datavd(datavd);
             })
         });
 
         // Enable the controller.
-        critical_section::with(|_| self.info.regs().mcr().modify(|w| w.men().enabled()));
+        critical_section::with(|_| self.info.regs().mcr().modify(|w| w.set_men(true)));
 
         // Clear all flags
         self.info.regs().msr().write(|w| {
-            w.epf()
-                .clear_bit_by_one()
-                .sdf()
-                .clear_bit_by_one()
-                .ndf()
-                .clear_bit_by_one()
-                .alf()
-                .clear_bit_by_one()
-                .fef()
-                .clear_bit_by_one()
-                .pltf()
-                .clear_bit_by_one()
-                .dmf()
-                .clear_bit_by_one()
-                .stf()
-                .clear_bit_by_one()
+            w.set_epf(Epf::INT_YES);
+            w.set_sdf(MsrSdf::INT_YES);
+            w.set_ndf(Ndf::INT_YES);
+            w.set_alf(Alf::INT_YES);
+            w.set_fef(MsrFef::INT_YES);
+            w.set_pltf(Pltf::INT_YES);
+            w.set_dmf(Dmf::INT_YES);
+            w.set_stf(Stf::INT_YES);
         });
 
         Ok(())
@@ -195,14 +184,17 @@ impl<'d, M: Mode> I2c<'d, M> {
     /// Resets both TX and RX FIFOs dropping their contents.
     fn reset_fifos(&self) {
         critical_section::with(|_| {
-            self.info.regs().mcr().modify(|w| w.rtf().reset().rrf().reset());
+            self.info.regs().mcr().modify(|w| {
+                w.set_rtf(McrRtf::RESET);
+                w.set_rrf(McrRrf::RESET);
+            });
         });
     }
 
     /// Checks whether the TX FIFO is full
     fn is_tx_fifo_full(&self) -> bool {
-        let txfifo_size = 1 << self.info.regs().param().read().mtxfifo().bits();
-        self.info.regs().mfsr().read().txcount().bits() == txfifo_size
+        let txfifo_size = 1 << self.info.regs().param().read().mtxfifo();
+        self.info.regs().mfsr().read().txcount() == txfifo_size
     }
 
     /// Checks whether the TX FIFO is empty
@@ -220,31 +212,21 @@ impl<'d, M: Mode> I2c<'d, M> {
     fn status(&self) -> Result<()> {
         let msr = self.info.regs().msr().read();
         self.info.regs().msr().write(|w| {
-            w.epf()
-                .clear_bit_by_one()
-                .sdf()
-                .clear_bit_by_one()
-                .ndf()
-                .clear_bit_by_one()
-                .alf()
-                .clear_bit_by_one()
-                .fef()
-                .clear_bit_by_one()
-                .fef()
-                .clear_bit_by_one()
-                .pltf()
-                .clear_bit_by_one()
-                .dmf()
-                .clear_bit_by_one()
-                .stf()
-                .clear_bit_by_one()
+            w.set_epf(Epf::INT_YES);
+            w.set_sdf(MsrSdf::INT_YES);
+            w.set_ndf(Ndf::INT_YES);
+            w.set_alf(Alf::INT_YES);
+            w.set_fef(MsrFef::INT_YES);
+            w.set_pltf(Pltf::INT_YES);
+            w.set_dmf(Dmf::INT_YES);
+            w.set_stf(Stf::INT_YES);
         });
 
-        if msr.ndf().bit_is_set() {
+        if msr.ndf() == Ndf::INT_YES {
             Err(Error::AddressNack)
-        } else if msr.alf().bit_is_set() {
+        } else if msr.alf() == Alf::INT_YES {
             Err(Error::ArbitrationLoss)
-        } else if msr.fef().bit_is_set() {
+        } else if msr.fef() == MsrFef::INT_YES {
             Err(Error::FifoError)
         } else {
             Ok(())
@@ -265,10 +247,10 @@ impl<'d, M: Mode> I2c<'d, M> {
             self.info.regs().msr().read().bits()
         );
 
-        self.info
-            .regs()
-            .mtdr()
-            .write(|w| unsafe { w.data().bits(data) }.cmd().variant(cmd));
+        self.info.regs().mtdr().write(|w| {
+            w.set_data(data);
+            w.set_cmd(cmd);
+        });
     }
 
     /// Prepares an appropriate Start condition on bus by issuing a
@@ -286,7 +268,7 @@ impl<'d, M: Mode> I2c<'d, M> {
         while self.is_tx_fifo_full() {}
 
         let addr_rw = address << 1 | if read { 1 } else { 0 };
-        self.send_cmd(if self.is_hs { Cmd::StartHs } else { Cmd::Start }, addr_rw);
+        self.send_cmd(if self.is_hs { Cmd::START_HS } else { Cmd::START }, addr_rw);
 
         // Wait for TxFIFO to be drained
         while !self.is_tx_fifo_empty() {}

@@ -574,7 +574,7 @@ impl<'d> Flex<'d> {
     /// The pin remains unmodified. The initial output level is unspecified, but
     /// can be changed before the pin is put into output mode.
     pub fn new(pin: Peri<'d, impl GpioPin>) -> Self {
-        pin.set_function(Mux::MUX00);
+        pin.set_function(Mux::MUX0);
         Self {
             pin: pin.into(),
             _marker: PhantomData,

@@ -166,8 +166,8 @@ mod sealed {
         };
     }
 
-    impl_pin!(P0_6, MUX1100);
-    impl_pin!(P3_6, MUX01);
-    impl_pin!(P3_8, MUX1100);
-    impl_pin!(P4_2, MUX01);
+    impl_pin!(P0_6, MUX12);
+    impl_pin!(P3_6, MUX1);
+    impl_pin!(P3_8, MUX12);
+    impl_pin!(P4_2, MUX1);
 }

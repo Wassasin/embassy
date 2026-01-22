@@ -769,7 +769,7 @@ macro_rules! impl_pin {
                 self.set_pull(crate::gpio::Pull::Disabled);
                 self.set_slew_rate(crate::gpio::SlewRate::Fast.into());
                 self.set_drive_strength(crate::gpio::DriveStrength::Normal.into());
-                self.set_function(Mux::MUX00);
+                self.set_function(Mux::MUX0);
             }
         }
     };

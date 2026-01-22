@@ -14,6 +14,7 @@ pub mod dma;
 pub mod gpio;
 
 // pub mod i2c;
+
 // pub mod lpuart;
 // pub mod ostimer;
 // pub mod reset_reason;
