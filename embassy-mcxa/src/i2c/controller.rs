@@ -287,7 +287,7 @@ impl<'d, M: Mode> I2c<'d, M> {
         // Wait until we have space in the TxFIFO
         while self.is_tx_fifo_full() {}
 
-        self.send_cmd(Cmd::Stop, 0);
+        self.send_cmd(Cmd::STOP, 0);
 
         // Wait for TxFIFO to be drained
         while !self.is_tx_fifo_empty() {}
@@ -306,13 +306,13 @@ impl<'d, M: Mode> I2c<'d, M> {
             // Wait until we have space in the TxFIFO
             while self.is_tx_fifo_full() {}
 
-            self.send_cmd(Cmd::Receive, (chunk.len() - 1) as u8);
+            self.send_cmd(Cmd::RECEIVE, (chunk.len() - 1) as u8);
 
             for byte in chunk.iter_mut() {
                 // Wait until there's data in the RxFIFO
                 while self.is_rx_fifo_empty() {}
 
-                *byte = self.info.regs().mrdr().read().data().bits();
+                *byte = self.info.regs().mrdr().read().data();
             }
         }
 
@@ -345,7 +345,7 @@ impl<'d, M: Mode> I2c<'d, M> {
             // Wait until we have space in the TxFIFO
             while self.is_tx_fifo_full() {}
 
-            self.send_cmd(Cmd::Transmit, *byte);
+            self.send_cmd(Cmd::TRANSMIT, *byte);
         }
 
         if send_stop == SendStop::Yes {
@@ -406,31 +406,21 @@ impl<'d> I2c<'d, Async> {
 
     fn enable_rx_ints(&self) {
         self.info.regs().mier().write(|w| {
-            w.rdie()
-                .enabled()
-                .ndie()
-                .enabled()
-                .alie()
-                .enabled()
-                .feie()
-                .enabled()
-                .pltie()
-                .enabled()
+            w.set_rdie(true);
+            w.set_ndie(true);
+            w.set_alie(true);
+            w.set_feie(true);
+            w.set_pltie(true);
         });
     }
 
     fn enable_tx_ints(&self) {
         self.info.regs().mier().write(|w| {
-            w.tdie()
-                .enabled()
-                .ndie()
-                .enabled()
-                .alie()
-                .enabled()
-                .feie()
-                .enabled()
-                .pltie()
-                .enabled()
+            w.set_tdie(true);
+            w.set_ndie(true);
+            w.set_alie(true);
+            w.set_feie(true);
+            w.set_pltie(true);
         });
     }
 
@@ -441,7 +431,7 @@ impl<'d> I2c<'d, Async> {
 
         // send the start command
         let addr_rw = address << 1 | if read { 1 } else { 0 };
-        self.send_cmd(if self.is_hs { Cmd::StartHs } else { Cmd::Start }, addr_rw);
+        self.send_cmd(if self.is_hs { Cmd::START_HS } else { Cmd::START }, addr_rw);
 
         self.info
             .wait_cell()
@@ -459,7 +449,7 @@ impl<'d> I2c<'d, Async> {
 
     async fn async_stop(&self) -> Result<()> {
         // send the stop command
-        self.send_cmd(Cmd::Stop, 0);
+        self.send_cmd(Cmd::STOP, 0);
 
         self.info
             .wait_cell()
@@ -487,7 +477,7 @@ impl<'d> I2c<'d, Async> {
             self.async_start(address, true).await?;
 
             // send receive command
-            self.send_cmd(Cmd::Receive, (chunk.len() - 1) as u8);
+            self.send_cmd(Cmd::RECEIVE, (chunk.len() - 1) as u8);
 
             self.info
                 .wait_cell()
@@ -512,7 +502,7 @@ impl<'d> I2c<'d, Async> {
                     .await
                     .map_err(|_| Error::ReadFail)?;
 
-                *byte = self.info.regs().mrdr().read().data().bits();
+                *byte = self.info.regs().mrdr().read().data();
             }
         }
 
@@ -554,7 +544,7 @@ impl<'d> I2c<'d, Async> {
                     // enable interrupts
                     self.enable_tx_ints();
                     // initiate transmit
-                    self.send_cmd(Cmd::Transmit, *byte);
+                    self.send_cmd(Cmd::TRANSMIT, *byte);
                     // if the tx FIFO is empty, we're done transmiting
                     self.is_tx_fifo_empty()
                 })

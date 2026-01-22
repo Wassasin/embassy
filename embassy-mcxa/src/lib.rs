@@ -12,8 +12,7 @@ pub mod config;
 pub mod crc;
 pub mod dma;
 pub mod gpio;
-
-// pub mod i2c;
+pub mod i2c;
 
 // pub mod lpuart;
 // pub mod ostimer;
