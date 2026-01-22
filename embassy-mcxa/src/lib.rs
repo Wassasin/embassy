@@ -8,11 +8,11 @@
 pub mod adc;
 pub mod clkout;
 pub mod clocks; // still provide clock helpers
+pub mod config;
+pub mod crc;
 pub mod dma;
 pub mod gpio;
 
-// pub mod config;
-// pub mod crc;
 // pub mod i2c;
 // pub mod lpuart;
 // pub mod ostimer;
