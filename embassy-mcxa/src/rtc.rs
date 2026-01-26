@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 
 use embassy_hal_internal::{Peri, PeripheralType};
 use maitake_sync::WaitCell;
-use nxp_pac::rtc0::vals::{Tcr, Um};
+use nxp_pac::rtc0::vals::{Swr, Tcr, Um};
 
 use crate::clocks::with_clocks;
 use crate::interrupt::typelevel::{Handler, Interrupt};
@@ -230,8 +230,8 @@ impl<'a> Rtc<'a> {
         }
 
         // RTC reset
-        info.cr().modify(|w| w.set_swr(nxp_pac::rtc0::vals::Swr::SWR_1));
-        info.cr().modify(|w| w.set_swr(nxp_pac::rtc0::vals::Swr::SWR_0));
+        info.cr().modify(|w| w.set_swr(Swr::SWR_1));
+        info.cr().modify(|w| w.set_swr(Swr::SWR_0));
         info.tsr().write(|w| w.set_tsr(1));
 
         info.cr().modify(|w| w.set_um(config.update_mode));
