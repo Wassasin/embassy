@@ -15,9 +15,9 @@ pub mod gpio;
 pub mod i2c;
 
 // pub mod lpuart;
-// pub mod ostimer;
-// pub mod reset_reason;
-// pub mod rtc;
+pub mod ostimer;
+pub mod reset_reason;
+pub mod rtc;
 pub mod trng;
 pub mod wwdt;
 

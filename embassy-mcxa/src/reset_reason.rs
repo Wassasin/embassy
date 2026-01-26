@@ -7,8 +7,7 @@
 /// Reads the most recent reset reason from the Core Mode Controller
 /// (CMC).
 pub fn reset_reason() -> ResetReasonRaw {
-    let regs = unsafe { &*crate::pac::Cmc::steal() };
-    let srs = regs.srs().read().bits();
+    let srs = crate::pac::CMC.srs().read().0;
     ResetReasonRaw(srs)
 }
 
