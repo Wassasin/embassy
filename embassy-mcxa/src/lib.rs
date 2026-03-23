@@ -13,8 +13,6 @@
 #[cfg(feature = "mcxa2xx")]
 #[path = "."]
 mod mcxa2xx_exclusive {
-    pub mod flash;
-
     pub use crate::chips::mcxa2xx::{Peripherals, init, interrupt, peripherals};
 }
 
@@ -38,6 +36,7 @@ mod all_chips {
     pub mod dma;
     #[cfg(feature = "executor-platform")]
     pub mod executor;
+    pub mod flash;
     pub mod gpio;
     pub mod i2c;
     pub mod i3c;
@@ -46,6 +45,7 @@ mod all_chips {
     pub mod ostimer;
     pub mod perf_counters;
     pub mod reset_reason;
+    pub mod rom;
     pub mod rtc;
     pub mod spi;
     pub mod trng;

@@ -1,16 +1,8 @@
-//! Flash driver for MCXA276 using ROM API.
+//! Flash driver using the ROM API.
 //!
-//! This module provides safe access to the MCXA276's internal flash memory through
+//! This module provides safe access to the internal flash memory through
 //! the ROM-resident flash driver API. The ROM API lives at a fixed address and exposes
 //! flash operations (init, erase, program, verify, read) via a function pointer table.
-//!
-//! # Flash Geometry (MCXA276)
-//!
-//! - Base address: `0x0000_0000`
-//! - Total size: 1 MB (`0x10_0000`)
-//! - Sector size: 8 KB (`0x2000`) — erase granularity
-//! - Page size: 128 bytes — program granularity
-//! - Phrase size: 16 bytes — minimum program unit
 //!
 //! # Safety
 //!
@@ -61,6 +53,7 @@ use embedded_storage::nor_flash::{ErrorType, NorFlash, NorFlashError, NorFlashEr
 
 use crate::pac;
 use crate::pac::syscon::vals::{ClrLpcac, DisDataSpec, DisFlashSpec, DisLpcac, DisMbeccErrData, DisMbeccErrInst};
+use crate::rom;
 
 // ---------------------------------------------------------------------------
 // Flash geometry constants
@@ -69,8 +62,13 @@ use crate::pac::syscon::vals::{ClrLpcac, DisDataSpec, DisFlashSpec, DisLpcac, Di
 /// Base address of the internal program flash.
 pub const FLASH_BASE: u32 = 0x0000_0000;
 
-/// Total size of the internal program flash in bytes (1 MB).
+/// Total size of the internal program flash in bytes.
+#[cfg(feature = "mcxa2xx")]
 pub const FLASH_SIZE: usize = 0x10_0000;
+
+/// Total size of the internal program flash in bytes.
+#[cfg(feature = "mcxa5xx")]
+pub const FLASH_SIZE: usize = 0x20_0000;
 
 /// Sector size in bytes (8 KB) — erase granularity.
 pub const SECTOR_SIZE: usize = 0x2000;
@@ -85,97 +83,13 @@ pub const PHRASE_SIZE: usize = 16;
 // ROM API constants
 // ---------------------------------------------------------------------------
 
-/// Base address of the ROM API bootloader tree for MCXA276.
-const ROM_API_BASE: u32 = 0x0300_5FE0;
-
 /// Flash erase key: `FOUR_CHAR_CODE('l','f','e','k')` in little-endian.
 const FLASH_ERASE_KEY: u32 = 0x6B65_666C;
 
-// ---------------------------------------------------------------------------
-// ROM API C-ABI structures
-// ---------------------------------------------------------------------------
-
-/// Flash FFR (Factory Failure Records) configuration, populated by `flash_init`.
-#[repr(C)]
-#[derive(Debug, Default, Copy, Clone)]
-struct FlashFfrConfig {
-    ffr_block_base: u32,
-    ffr_total_size: u32,
-    ffr_page_size: u32,
-    sector_size: u32,
-    cfpa_page_version: u32,
-    cfpa_page_offset: u32,
-}
-
-/// Flash driver configuration, populated by `flash_init`.
-#[repr(C)]
-#[derive(Debug, Default, Copy, Clone)]
-struct FlashConfig {
-    pflash_block_base: u32,
-    pflash_total_size: u32,
-    pflash_block_count: u32,
-    pflash_page_size: u32,
-    pflash_sector_size: u32,
-    ffr_config: FlashFfrConfig,
-}
-
-// Type aliases for ROM API function pointer signatures (C ABI).
-// Only `flash_init` takes `*mut FlashConfig`; all other calls use `*const FlashConfig`.
-type FnFlashInit = unsafe extern "C" fn(config: *mut FlashConfig) -> i32;
-type FnFlashEraseSector = unsafe extern "C" fn(config: *const FlashConfig, start: u32, len: u32, key: u32) -> i32;
-type FnFlashProgramPhrase =
-    unsafe extern "C" fn(config: *const FlashConfig, start: u32, src: *const u8, len: u32) -> i32;
-type FnFlashProgramPage = unsafe extern "C" fn(config: *const FlashConfig, start: u32, src: *const u8, len: u32) -> i32;
-type FnFlashVerifyProgram = unsafe extern "C" fn(
-    config: *const FlashConfig,
-    start: u32,
-    len: u32,
-    expected: *const u8,
-    failed_addr: *mut u32,
-    failed_data: *mut u32,
-) -> i32;
-type FnFlashVerifyErasePhrase = unsafe extern "C" fn(config: *const FlashConfig, start: u32, len: u32) -> i32;
-type FnFlashVerifyErasePage = unsafe extern "C" fn(config: *const FlashConfig, start: u32, len: u32) -> i32;
-type FnFlashVerifyEraseSector = unsafe extern "C" fn(config: *const FlashConfig, start: u32, len: u32) -> i32;
-type FnFlashGetProperty = unsafe extern "C" fn(config: *const FlashConfig, property: u32, value: *mut u32) -> i32;
-type FnFlashRead = unsafe extern "C" fn(config: *const FlashConfig, start: u32, dest: *mut u8, len: u32) -> i32;
-
-/// ROM API flash driver interface vtable.
-///
-/// **Layout note**: On MCXA276, `FSL_FEATURE_ROMAPI_IFR == 0`, so the three
-/// IFR function pointers are *omitted*. `flash_read` and `version` follow
-/// immediately after `flash_get_property`.
-#[repr(C)]
-struct FlashDriverInterface {
-    flash_init: FnFlashInit,
-    flash_erase_sector: FnFlashEraseSector,
-    flash_program_phrase: FnFlashProgramPhrase,
-    flash_program_page: FnFlashProgramPage,
-    flash_verify_program: FnFlashVerifyProgram,
-    flash_verify_erase_phrase: FnFlashVerifyErasePhrase,
-    flash_verify_erase_page: FnFlashVerifyErasePage,
-    flash_verify_erase_sector: FnFlashVerifyEraseSector,
-    flash_get_property: FnFlashGetProperty,
-    // IFR functions omitted (FSL_FEATURE_ROMAPI_IFR == 0 on MCXA276)
-    flash_read: FnFlashRead,
-    version: u32,
-}
-
-/// Root of the ROM bootloader API tree.
-#[repr(C)]
-struct BootloaderTree {
-    run_bootloader: unsafe extern "C" fn(arg: *mut core::ffi::c_void),
-    flash_driver: *const FlashDriverInterface,
-    jump: unsafe extern "C" fn(arg: *mut core::ffi::c_void),
-}
-
 /// Returns a reference to the ROM API flash driver interface.
 #[inline(always)]
-fn flash_api() -> &'static FlashDriverInterface {
-    unsafe {
-        let tree = &*(ROM_API_BASE as *const BootloaderTree);
-        &*tree.flash_driver
-    }
+fn flash_api() -> &'static rom::FlashDriverInterface {
+    unsafe { &*rom::BootloaderTree::get().flash_driver }
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +211,7 @@ fn clear_caches() {
 /// API's `flash_init` function during construction. All subsequent operations
 /// pass this config to the ROM API.
 pub struct Flash {
-    config: FlashConfig,
+    config: rom::FlashConfig,
 }
 
 impl Flash {
@@ -306,7 +220,7 @@ impl Flash {
     /// This calls the ROM API `flash_init` to populate the internal flash
     /// configuration. Returns an error if the ROM API reports failure.
     pub fn new() -> Result<Self, Error> {
-        let mut config = FlashConfig::default();
+        let mut config = rom::FlashConfig::default();
         let status = unsafe { (flash_api().flash_init)(&mut config) };
         check_status(status)?;
         Ok(Self { config })
