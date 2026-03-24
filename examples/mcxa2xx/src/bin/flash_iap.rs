@@ -35,7 +35,7 @@ async fn main(_spawner: Spawner) {
     // -----------------------------------------------------------------------
     defmt::info!("\n Initializing flash driver.");
     let mut flash = defmt::unwrap!(Flash::new());
-    defmt::info!("\n Flash init successfull!\n");
+    defmt::info!("\n Flash init successfull! version = {:x}\n", flash.rom_api_version());
 
     defmt::info!("\n Config flash memory access time.\n");
 
@@ -52,6 +52,14 @@ async fn main(_spawner: Spawner) {
     defmt::info!("\n kFLASH_PropertyPflashSectorSize = {}", pflash_sector_size);
     defmt::info!("\n kFLASH_PropertyPflashTotalSize = {}", pflash_total_size);
     defmt::info!("\n kFLASH_PropertyPflashPageSize = 0x{:X}", pflash_page_size);
+
+    let ifr0 = pflash_total_size - 8 * 1024;
+    defmt::info!("Ifr0 = 0x{:X}", ifr0);
+
+    let mut buf = [0u8; 128];
+    defmt::unwrap!(flash.blocking_read(ifr0, &mut buf));
+
+    defmt::info!("{:x}", buf);
 
     let dest_addr: u32 = pflash_block_base + (pflash_total_size - (SECTOR_INDEX_FROM_END * pflash_sector_size));
 
